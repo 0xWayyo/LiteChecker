@@ -39,6 +39,46 @@ def windows(monkeypatch):
     return windows_security
 
 
+@pytest.mark.parametrize("owner", ["S-1-5-18", "S-1-5-32-544"])
+def test_trusted_privileged_child_owner_with_private_acl_is_usable(tmp_path, monkeypatch, windows, owner):
+    # Elevated Windows tokens can create Admin-owned children under a parent
+    # whose owner was explicitly set to the current user by the bootstrap.
+    from litechecker.windows_process_state import safe_root
+
+    candidate = tmp_path / ".updates/releases/0.5.0"
+    candidate.mkdir(parents=True)
+    file = candidate / "fixture.txt"
+    file.write_bytes(b"controlled source")
+    _, current, present, entries = windows._read_directory_acl(tmp_path)
+    monkeypatch.setattr(windows, "_read_directory_acl", lambda path: (
+        current if Path(path) == tmp_path else owner, current, present, entries,
+    ))
+    assert windows.assert_private_directory(tmp_path) == tmp_path
+    assert windows.assert_private_directory(candidate) == candidate
+    assert windows.assert_private_file(file) == file
+    assert safe_root(candidate) == candidate
+
+
+@pytest.mark.parametrize("bad", ["foreign-owner", "broad-read", "null-dacl", "unsupported-ace"])
+def test_privileged_owner_does_not_bypass_acl_or_owner_guards(tmp_path, monkeypatch, windows, bad):
+    _, current, present, entries = windows._read_directory_acl(tmp_path)
+    owner = "S-1-5-32-544"
+    if bad == "foreign-owner":
+        owner = "S-1-5-21-999"
+    elif bad == "broad-read":
+        entries += ((0, 0x120089, "S-1-1-0"),)
+    elif bad == "null-dacl":
+        present = False
+    else:
+        entries += ((5, 0x1F01FF, current),)
+    monkeypatch.setattr(windows, "_read_directory_acl", lambda path: (owner, current, present, entries))
+    with pytest.raises(ValueError):
+        windows.assert_private_directory(tmp_path)
+    with pytest.raises((ValueError, OSError)):
+        update_store.UpdateStore(tmp_path).ensure_layout()
+    assert not (tmp_path / ".updates").exists()
+
+
 def test_runtime_uses_windows_exe_without_posix_execution_bits(tmp_path):
     from windows_test_support import secure_test_directory
     secure_test_directory(tmp_path)
@@ -224,9 +264,16 @@ def test_native_windows_acl_state_runtime_and_locked_cleanup(tmp_path):
     store.write_install(update_store.default_install_state())
     assert store.read_install()["active"] is None
     release = store.stage("0.1.0", update_store.validate_source_zip(source_zip()))
+    owner, current, present, entries = windows_security._read_directory_acl(release)
+    assert owner in {current, "S-1-5-18", "S-1-5-32-544"}
+    assert present and entries
+    assert windows_security.assert_private_directory(release) == release
+    from litechecker.windows_process_state import safe_root
+    assert safe_root(release) == release
     executable = release / ".windows-native/venv/Scripts/python.exe"
     executable.parent.mkdir(parents=True)
     executable.write_bytes(b"controlled runtime, not executed")
+    assert windows_security.assert_private_file(executable) == executable
     assert update_launcher.runtime_python(release, system="Windows") == executable
     with executable.open("rb"):
         assert not store.remove_release("0.1.0")

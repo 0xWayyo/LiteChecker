@@ -457,13 +457,13 @@ async def test_interrupted_diagnostic_replaces_stale_success_without_touching_se
     report.write_text("old measurement do not replace")
 
     async def cancelled():
-        assert "old successful" not in saved.read_text()
+        assert "old successful" not in saved.read_text(encoding="utf-8")
         raise asyncio.CancelledError()
 
     monkeypatch.setattr(windows_diagnostics, "diagnose", cancelled)
     with pytest.raises(asyncio.CancelledError):
         await windows_trial.execute_diagnostics(tmp_path)
-    assert "остановлена" in saved.read_text()
+    assert "остановлена" in saved.read_text(encoding="utf-8")
     assert settings.read_text() == "private-data-do-not-read"
     assert report.read_text() == "old measurement do not replace"
 
@@ -483,7 +483,7 @@ def test_diagnostic_cli_needs_no_subscription_and_saves_its_own_file(tmp_path, m
     monkeypatch.setattr(windows_trial, "load_settings", forbidden)
     assert windows_trial.main(["--root", str(tmp_path), "--diagnose"]) == 1
     saved = tmp_path / "windows-state" / "last-diagnostics.txt"
-    assert "10013" in saved.read_text()
+    assert "10013" in saved.read_text(encoding="utf-8")
     assert str(saved) in capsys.readouterr().out
     assert not (saved.parent / "settings.json").exists()
     assert not (saved.parent / "last-report.txt").exists()

@@ -132,9 +132,14 @@ def _assert_private(path: Path, *, directory: bool) -> Path:
             raise ValueError("private-path-permissions-unsafe")
         return path
     owner, current, present, entries = _read_directory_acl(path)
-    if owner != current or not present:
-        raise ValueError("windows-private-owner-or-acl-unsafe")
     allowed = {current, "S-1-5-18", "S-1-5-32-544"}
+    # A new object's owner comes from the creator's TOKEN_OWNER, not its
+    # parent's owner. Elevated tokens can therefore create Administrators-
+    # owned children of a current-user-owned private baseline. These are the
+    # same privileged principals already trusted by our DACL policy; foreign
+    # owners remain forbidden because ownership implicitly permits WRITE_DAC.
+    if owner not in allowed or not present:
+        raise ValueError("windows-private-owner-or-acl-unsafe")
     for kind, mask, trustee in entries:
         if kind not in (0, 1) or kind == 0 and mask and trustee not in allowed:
             raise ValueError("windows-private-acl-unsafe")

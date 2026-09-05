@@ -165,7 +165,7 @@ async def test_windows_execute_opt_in_factory_and_removes_stale_success(tmp_path
     assert calls[0]["send"] is False
     assert calls[0]["network_factory"] == windows_network.WindowsDirectNetwork.discover
     assert calls[0]["validate_after"] is True
-    assert (settings.state_dir / "last-report.txt").read_text() == result.text + "\n"
+    assert (settings.state_dir / "last-report.txt").read_text(encoding="utf-8") == result.text + "\n"
     assert not old.exists()
 
 
@@ -212,12 +212,12 @@ async def test_windows_delivery_preserves_current_report_and_records_acceptance(
     class Sender:
         def __init__(self, **kwargs):
             # Persist exactly this measurement before any Telegram setup/send.
-            assert report_file.read_text() == current.text + "\n"
+            assert report_file.read_text(encoding="utf-8") == current.text + "\n"
             calls.append(kwargs)
 
         async def send_chunks(self, chunks):
             assert list(chunks) == [current.text]
-            assert report_file.read_text() == current.text + "\n"
+            assert report_file.read_text(encoding="utf-8") == current.text + "\n"
             if delivery == "error":
                 raise RuntimeError(f"secret URL: {token} {proxy}")
             if delivery == "timeout":
@@ -233,7 +233,7 @@ async def test_windows_delivery_preserves_current_report_and_records_acceptance(
     assert result.text == current.text
     assert result.report is current.report
     assert result.available is True
-    assert report_file.read_text() == current.text + "\n"
+    assert report_file.read_text(encoding="utf-8") == current.text + "\n"
     assert (settings.state_dir / "last-observation.json").read_text() == '{"current":true}'
     assert result.delivery_accepted is (None if delivery == "not-requested" else delivery == "accepted")
     if delivery == "not-requested":

@@ -143,6 +143,8 @@ def test_job_cannot_silently_run_without_native_ownership():
 
 @pytest.mark.skipif(sys.platform != "win32", reason="requires native Windows Job Objects")
 def test_native_job_close_kills_assigned_process(tmp_path):
+    import ctypes
+    from ctypes import wintypes
     import subprocess
     job = module("windows_job").WindowsJob()
     ready = tmp_path / "owned-child-ready.txt"
@@ -163,10 +165,27 @@ def test_native_job_close_kills_assigned_process(tmp_path):
         assert ready.exists(), "controlled child never reached its sleeping state"
         assert int(ready.read_text()) == child.pid, "must assign the actual interpreter, not a redirector"
         assert child.poll() is None, "a previously exited process does not prove kill-on-close"
-        assert job.active_processes() == 1
+        # Windows may add another owned runtime/console process. Query the real
+        # job membership instead of assuming one Python executable means one PID.
+        class ProcessIds(ctypes.Structure):
+            _fields_ = [("assigned", wintypes.DWORD), ("count", wintypes.DWORD),
+                        ("pids", ctypes.c_size_t * 128)]
+
+        membership = ProcessIds()
+        assert job._api.QueryInformationJobObject(
+            job._handle, 3, ctypes.byref(membership), ctypes.sizeof(membership), None,
+        ), "could not inspect this test-owned Job Object"
+        assert 1 <= membership.count == membership.assigned <= 128
+        members = set(membership.pids[:membership.count])
+        assert child.pid in members
+        assert os.getpid() not in members, "the test runner must not belong to its child job"
+        assert job.active_processes() >= 1
         job.close()
         child.wait(timeout=5)
-        assert not psutil.pid_exists(child.pid)
+        deadline = time.monotonic() + 5
+        while any(psutil.pid_exists(pid) for pid in members) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert not any(psutil.pid_exists(pid) for pid in members), "an owned job member survived close"
     finally:
         job.close()
         if child.poll() is None:
