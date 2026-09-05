@@ -119,6 +119,8 @@ def test_powershell_app_streams_python_menu_and_preserves_exit_code(tmp_path, ex
     harness.write_text(r"""
 param([string]$ScriptPath,[string]$Python,[string]$Entry,[string]$Root)
 $ErrorActionPreference='Stop'
+[Console]::OutputEncoding=New-Object System.Text.UTF8Encoding($false)
+$OutputEncoding=[Console]::OutputEncoding
 $tokens=$null; $errors=$null
 $ast=[System.Management.Automation.Language.Parser]::ParseFile($ScriptPath,[ref]$tokens,[ref]$errors)
 if($errors.Count){throw ($errors | ForEach-Object {$_.Message} | Out-String)}
@@ -137,7 +139,7 @@ Invoke-NormalApp
         [powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-File", str(harness),
          "-ScriptPath", str(REPOSITORY / "scripts" / "windows-native.ps1"),
          "-Python", sys.executable, "-Entry", str(entry), "-Root", str(root)],
-        text=True, input="controlled-input\n", capture_output=True, timeout=30,
+        encoding="utf-8", input="controlled-input\n", capture_output=True, timeout=30,
     )
     assert "fixture-output" in result.stdout
     assert "fixture-input:" in result.stdout

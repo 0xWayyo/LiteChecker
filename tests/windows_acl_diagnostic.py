@@ -24,11 +24,13 @@ $paths=[ordered]@{
   parent=$base
   child_directory=[IO.Path]::Combine($base,'child')
   child_file=[IO.Path]::Combine($base,'child','fixture.txt')
+  mode700_directory=[IO.Path]::Combine($base,'mode700')
+  mode700_file=[IO.Path]::Combine($base,'mode700','fixture.txt')
 }
 $records=[ordered]@{}
 foreach($label in $paths.Keys) {
   $path=$paths[$label]
-  if($label -eq 'child_file') {$acl=[IO.File]::GetAccessControl($path)}
+  if($label.EndsWith('_file')) {$acl=[IO.File]::GetAccessControl($path)}
   else {$acl=[IO.Directory]::GetAccessControl($path)}
   $raw=[Security.AccessControl.RawSecurityDescriptor]::new($acl.GetSecurityDescriptorBinaryForm(),0)
   $entries=@($acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]) | ForEach-Object {
@@ -76,7 +78,12 @@ def main():
         child.mkdir()
         file = child / "fixture.txt"
         file.write_bytes(b"disposable diagnostic fixture")
-        paths = {"parent": parent, "child_directory": child, "child_file": file}
+        mode700 = parent / "mode700"
+        mode700.mkdir(mode=0o700)
+        mode700_file = mode700 / "fixture.txt"
+        mode700_file.write_bytes(b"disposable diagnostic fixture")
+        paths = {"parent": parent, "child_directory": child, "child_file": file,
+                 "mode700_directory": mode700, "mode700_file": mode700_file}
         native = {label: _native_record(path) for label, path in paths.items()}
         result = subprocess.run(
             ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", DOTNET_READER],
@@ -89,7 +96,7 @@ def main():
         dotnet = json.loads(result.stdout)
         checks = {}
         for label, path in paths.items():
-            check = windows_security.assert_private_file if label == "child_file" else windows_security.assert_private_directory
+            check = windows_security.assert_private_file if label.endswith("_file") else windows_security.assert_private_directory
             try:
                 check(path)
                 checks[label] = "accepted"

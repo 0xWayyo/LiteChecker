@@ -54,6 +54,7 @@ jobs:
           python-version: "3.12.11"
           enable-cache: false
       - name: Install locked native dependencies
+        id: native-deps
         run: uv sync --frozen --all-groups
       - name: Compare native ACL ownership with Windows token defaults
         run: uv run --no-sync python tests/windows_acl_diagnostic.py
@@ -70,6 +71,7 @@ jobs:
           tests/test_windows_bootstrap.py tests/test_windows_update.py
           tests/test_windows_update_storage.py tests/test_windows_update_native.py
       - name: Prepare actual pinned Windows runtime from a clean folder
+        if: ${{ !cancelled() && steps.native-deps.outcome == 'success' }}
         env:
           LC_WINDOWS_BOOTSTRAP_SMOKE: "1"
         run: uv run --no-sync pytest tests/test_windows_bootstrap_runtime.py -v

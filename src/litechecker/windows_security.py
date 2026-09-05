@@ -141,7 +141,12 @@ def _assert_private(path: Path, *, directory: bool) -> Path:
     if owner not in allowed or not present:
         raise ValueError("windows-private-owner-or-acl-unsafe")
     for kind, mask, trustee in entries:
-        if kind not in (0, 1) or kind == 0 and mask and trustee not in allowed:
+        # OWNER RIGHTS denotes this object's current owner (unlike the
+        # CREATOR OWNER inheritance placeholder). CPython's Windows mkdir(0700)
+        # uses it. Resolve only after validating the owner above; this grants
+        # no additional principal access and does not rewrite the descriptor.
+        effective_trustee = owner if trustee == "S-1-3-4" else trustee
+        if kind not in (0, 1) or kind == 0 and mask and effective_trustee not in allowed:
             raise ValueError("windows-private-acl-unsafe")
     return path
 

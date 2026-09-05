@@ -79,6 +79,41 @@ def test_privileged_owner_does_not_bypass_acl_or_owner_guards(tmp_path, monkeypa
     assert not (tmp_path / ".updates").exists()
 
 
+@pytest.mark.parametrize("owner", ["S-1-5-21-123", "S-1-5-18", "S-1-5-32-544"])
+def test_owner_rights_ace_resolves_only_to_validated_trusted_owner(tmp_path, monkeypatch, windows, owner):
+    # Python 3.12.11 mkdir(0700) emits SY + BA + OW, not an explicit user SID.
+    current = "S-1-5-21-123"
+    entries = ((0, 0x1F01FF, "S-1-5-18"), (0, 0x1F01FF, "S-1-5-32-544"),
+               (0, 0x1F01FF, "S-1-3-4"))
+    monkeypatch.setattr(windows, "_read_directory_acl", lambda path: (owner, current, True, entries))
+    file = tmp_path / "fixture.txt"
+    file.write_bytes(b"private")
+    assert windows.assert_private_directory(tmp_path) == tmp_path
+    assert windows.assert_private_file(file) == file
+    store = update_store.UpdateStore(tmp_path)
+    store.write_install(update_store.default_install_state())
+    assert store.read_install()["active"] is None
+
+
+@pytest.mark.parametrize("bad", ["foreign-owner", "S-1-1-0", "S-1-5-32-545", "S-1-3-0"])
+def test_owner_rights_does_not_authorize_foreign_owner_or_broad_trustees(tmp_path, monkeypatch, windows, bad):
+    current = "S-1-5-21-123"
+    owner = "S-1-5-21-999" if bad == "foreign-owner" else "S-1-5-32-544"
+    entries = ((0, 0x1F01FF, "S-1-3-4"),)
+    if bad != "foreign-owner":
+        entries += ((0, 0x120089, bad),)
+    monkeypatch.setattr(windows, "_read_directory_acl", lambda path: (owner, current, True, entries))
+    file = tmp_path / "fixture.txt"
+    file.write_bytes(b"private")
+    with pytest.raises(ValueError):
+        windows.assert_private_directory(tmp_path)
+    with pytest.raises(ValueError):
+        windows.assert_private_file(file)
+    with pytest.raises((ValueError, OSError)):
+        update_store.UpdateStore(tmp_path).ensure_layout()
+    assert not (tmp_path / ".updates").exists()
+
+
 def test_runtime_uses_windows_exe_without_posix_execution_bits(tmp_path):
     from windows_test_support import secure_test_directory
     secure_test_directory(tmp_path)
@@ -280,3 +315,25 @@ def test_native_windows_acl_state_runtime_and_locked_cleanup(tmp_path):
         assert (release / update_store.OWNED_MARKER).exists()
     assert store.remove_release("0.1.0")
     assert not release.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="actual Windows mkdir(0700) ACL boundary")
+def test_native_windows_mode700_owner_rights_acl_is_validated_without_rewrite(tmp_path):
+    from litechecker import windows_security
+    from windows_test_support import secure_test_directory
+
+    parent = tmp_path / "private-parent"
+    parent.mkdir()
+    secure_test_directory(parent)
+    child = parent / "mode700"
+    child.mkdir(mode=0o700)
+    file = child / "fixture.txt"
+    file.write_bytes(b"private contents")
+    before = {path: windows_security._read_directory_acl(path) for path in (child, file)}
+    for owner, current, present, entries in before.values():
+        assert owner in {current, "S-1-5-18", "S-1-5-32-544"}
+        assert present
+        assert any(trustee == "S-1-3-4" for _, _, trustee in entries)
+    assert windows_security.assert_private_directory(child) == child
+    assert windows_security.assert_private_file(file) == file
+    assert {path: windows_security._read_directory_acl(path) for path in (child, file)} == before
