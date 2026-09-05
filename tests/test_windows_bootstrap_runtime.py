@@ -17,6 +17,7 @@ ENABLED = os.name == "nt" and os.environ.get("LC_WINDOWS_BOOTSTRAP_SMOKE") == "1
 @pytest.mark.skipif(not ENABLED, reason="set LC_WINDOWS_BOOTSTRAP_SMOKE=1 in native Windows CI")
 def test_real_candidate_prepare_and_isolated_validation(tmp_path):
     from litechecker.update_launcher import runtime_python
+    from litechecker.windows_process_state import python_launch
     from windows_test_support import secure_test_directory
 
     baseline = tmp_path / "LiteChecker" / "_app"
@@ -75,10 +76,12 @@ def test_real_candidate_prepare_and_isolated_validation(tmp_path):
         (candidate / ".windows-native" / "python").resolve()
     )
 
+    base_executable, environment = python_launch(candidate)
+    assert base_executable.is_relative_to(candidate / ".windows-native")
     validation = subprocess.run(
         [str(python), "-I", "-B", str(candidate / "scripts" / "windows-app-entry.py"),
          "worker", "--validate", "--root", str(baseline), "--release", str(candidate)],
         cwd=tmp_path, stdin=subprocess.DEVNULL, text=True, capture_output=True, timeout=30,
-        env={**os.environ, "PYTHONPATH": str(tmp_path / "hostile")},
+        executable=str(base_executable), env=environment,
     )
     assert validation.returncode == 0, validation.stdout + validation.stderr
