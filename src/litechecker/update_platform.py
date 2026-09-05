@@ -16,13 +16,33 @@ import subprocess
 
 from filelock import AsyncFileLock
 
+from litechecker.native_runtime import (
+    DIRECT_SERVICE_LABEL,
+    UPDATER_SERVICE_LABEL,
+    atomic_write,
+    build_direct_service_plist,
+    direct_service_plist_path,
+    ensure_launch_agents_directory,
+    launch_agents_directory,
+    updater_plist_path,
+)
 from litechecker.state import _atomic_write_json
 from litechecker.update_launcher import VERSION, checked_path, read_bytes, read_json, runtime_python, select_release
 
 
 class UpdatePlatformError(RuntimeError):
-    def __init__(self, code="update-platform-unavailable"):
+    def __init__(
+        self,
+        code="update-platform-unavailable",
+        *,
+        operation: str | None = None,
+        reason: str | None = None,
+        exit_code: int | None = None,
+    ):
         super().__init__(code)
+        self.operation = operation
+        self.reason = reason
+        self.exit_code = exit_code
 
 
 @dataclass(frozen=True)
@@ -31,9 +51,22 @@ class CommandResult:
     stdout: str = ""
 
 
+def _command_operation(args) -> str:
+    try:
+        executable = Path(str(args[0])).name
+    except (IndexError, TypeError):
+        return "owned-command"
+    if executable in {"bash", "docker", "launchctl", "systemctl"}:
+        return executable
+    if re.fullmatch(r"python(?:3(?:\.[0-9]+)?)?", executable):
+        return "python"
+    return "owned-command"
+
+
 async def run_command(args, *, cwd=None, env=None, timeout=30) -> CommandResult:
     """Run an owned subprocess with bounded output/deadline and child cleanup."""
     process = None
+    operation = _command_operation(args)
     try:
         async with asyncio.timeout(timeout):
             process = await asyncio.create_subprocess_exec(
@@ -44,13 +77,25 @@ async def run_command(args, *, cwd=None, env=None, timeout=30) -> CommandResult:
             while chunk := await process.stdout.read(8192):
                 output.extend(chunk)
                 if len(output) > 65536:
-                    raise UpdatePlatformError("update-command-output-limit")
+                    raise UpdatePlatformError(
+                        "update-command-output-limit",
+                        operation=operation,
+                        reason="output-limit",
+                    )
             await process.wait()
             return CommandResult(process.returncode, output.decode("utf-8", errors="replace"))
     except asyncio.CancelledError:
         raise
+    except UpdatePlatformError:
+        raise
+    except TimeoutError:
+        raise UpdatePlatformError(
+            "update-command-failed", operation=operation, reason="timeout"
+        ) from None
     except Exception:
-        raise UpdatePlatformError("update-command-failed") from None
+        raise UpdatePlatformError(
+            "update-command-failed", operation=operation, reason="execution-failed"
+        ) from None
     finally:
         if process is not None and process.returncode is None:
             try:
@@ -119,16 +164,22 @@ class _Adapter:
     async def _run(self, args, *, cwd=None, env=None, timeout=30, allow_failure=False):
         result = await self._runner(args, cwd=cwd, env=env, timeout=timeout)
         if result.returncode and not allow_failure:
-            raise UpdatePlatformError("update-command-failed")
+            exit_code = result.returncode if type(result.returncode) is int else None
+            raise UpdatePlatformError(
+                "update-command-failed",
+                operation=_command_operation(args),
+                reason="nonzero-exit",
+                exit_code=exit_code,
+            )
         return result
 
 
 class NativeUpdateAdapter(_Adapter):
     def __init__(self, root, *, runner=None, launch_agents=None):
         super().__init__(root, runner=runner, system="Darwin")
-        self.launch_agents = Path(launch_agents) if launch_agents is not None else Path.home() / "Library/LaunchAgents"
-        self.plist = self.launch_agents / "com.litechecker.direct.plist"
-        self.target = f"gui/{os.getuid()}/com.litechecker.direct"
+        self.launch_agents = Path(launch_agents) if launch_agents is not None else launch_agents_directory()
+        self.plist = direct_service_plist_path(self.launch_agents)
+        self.target = f"gui/{os.getuid()}/{DIRECT_SERVICE_LABEL}"
 
     async def _actual_running(self):
         result = await self._run(["launchctl", "print", self.target], allow_failure=True)
@@ -149,27 +200,20 @@ class NativeUpdateAdapter(_Adapter):
             raise UpdatePlatformError("native-prepare-failed") from None
 
     def _write_plist(self, release, python):
-        if self.launch_agents.is_symlink() or self.plist.is_symlink():
+        if self.plist.is_symlink():
             raise UpdatePlatformError("native-plist-unsafe")
-        self.launch_agents.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "Label": "com.litechecker.direct",
-            "ProgramArguments": [str(python), "-m", "litechecker.direct_service", "--root", str(self.baseline), "--xray", str(release / ".native-direct/xray")],
-            "WorkingDirectory": str(release), "RunAtLoad": True, "KeepAlive": True,
-            "ThrottleInterval": 30, "Umask": 0o077, "ProcessType": "Background",
-            "EnvironmentVariables": {"PYTHONPATH": str(release / "src"), "PYTHONUNBUFFERED": "1", "PYTHONDONTWRITEBYTECODE": "1"},
-            "StandardOutPath": str(self.state_dir / "service.log"),
-            "StandardErrorPath": str(self.state_dir / "service.log"),
-        }
-        # Existing helper gives an atomic fsync/replace without chmodding LaunchAgents.
-        from litechecker.native_install import _atomic_write
-        _atomic_write(self.plist, plistlib.dumps(payload), 0o600, private_parent=False)
+        ensure_launch_agents_directory(self.launch_agents)
+        payload = build_direct_service_plist(self.baseline, release)
+        if payload["ProgramArguments"][0] != str(python):
+            raise UpdatePlatformError("native-runtime-invalid")
+        atomic_write(self.plist, plistlib.dumps(payload), 0o600, private_parent=False)
 
     async def activate(self, release, running):
         try:
             release = self._release(release)
             python = runtime_python(release, system="Darwin")
             checked_path(release, release / ".native-direct/xray", regular=True)
+            ensure_launch_agents_directory(self.launch_agents)
             async with self._control_lock():
                 await self._run(["launchctl", "bootout", self.target], allow_failure=True)
                 self._write_plist(release, python)
@@ -475,10 +519,10 @@ def install_update_schedule(root: Path) -> None:
     python = runtime_python(root, system=system)
     launcher = checked_path(root, root / "src/litechecker/update_launcher.py", regular=True)
     if system == "Darwin":
-        destination = Path.home() / "Library/LaunchAgents/com.litechecker.updater.plist"
-        from litechecker.native_install import _atomic_write
-        payload = {"Label": "com.litechecker.updater", "ProgramArguments": [str(python), str(launcher), "--root", str(root), "check"], "StartInterval": 3600, "RunAtLoad": True, "Umask": 0o077, "ProcessType": "Background"}
-        _atomic_write(destination, plistlib.dumps(payload), 0o600, private_parent=False)
+        launch_agents = ensure_launch_agents_directory(launch_agents_directory())
+        destination = updater_plist_path(launch_agents)
+        payload = {"Label": UPDATER_SERVICE_LABEL, "ProgramArguments": [str(python), str(launcher), "--root", str(root), "check"], "EnvironmentVariables": {"LITECHECKER_LAUNCH_AGENTS_DIR": str(launch_agents)}, "StartInterval": 3600, "RunAtLoad": True, "Umask": 0o077, "ProcessType": "Background"}
+        atomic_write(destination, plistlib.dumps(payload), 0o600, private_parent=False)
         subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/com.litechecker.updater"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30, check=False)
         result = subprocess.run(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(destination)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30, check=False)
     else:
@@ -486,14 +530,13 @@ def install_update_schedule(root: Path) -> None:
         if directory.is_symlink():
             raise UpdatePlatformError("update-schedule-path-invalid")
         directory.mkdir(parents=True, exist_ok=True)
-        from litechecker.native_install import _atomic_write
         def quoted(value):
             return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%").replace("$", "$$") + '"'
         command = " ".join(map(quoted, [python, launcher, "--root", root, "check"]))
         service = f"[Unit]\nDescription=LiteChecker signed update check\n[Service]\nType=oneshot\nUMask=0077\nExecStart={command}\nTimeoutStartSec=1800\n"
         timer = "[Unit]\nDescription=Hourly LiteChecker update check\n[Timer]\nOnStartupSec=5m\nOnCalendar=hourly\nPersistent=false\n[Install]\nWantedBy=timers.target\n"
-        _atomic_write(directory / "litechecker-updater.service", service.encode(), 0o600, private_parent=False)
-        _atomic_write(directory / "litechecker-updater.timer", timer.encode(), 0o600, private_parent=False)
+        atomic_write(directory / "litechecker-updater.service", service.encode(), 0o600, private_parent=False)
+        atomic_write(directory / "litechecker-updater.timer", timer.encode(), 0o600, private_parent=False)
         subprocess.run(["systemctl", "--user", "daemon-reload"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30, check=True)
         result = subprocess.run(["systemctl", "--user", "enable", "--now", "litechecker-updater.timer"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30, check=False)
     if result.returncode:

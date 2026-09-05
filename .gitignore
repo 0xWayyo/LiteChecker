@@ -4,9 +4,12 @@ __pycache__/
 *.py[cod]
 .venv/
 dist/
+.env
 .env.agent
 .env.collector
 .env.standalone
+native-settings.json
+CONTENTS.sha256.json
 state/
 agents.json
 secrets/

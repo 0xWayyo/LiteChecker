@@ -147,7 +147,7 @@ async def test_each_production_cycle_rediscovers_and_refreshes(monkeypatch, tmp_
     monkeypatch.setattr(direct_check, "DirectRelay", Relay)
     monkeypatch.setattr(direct_check, "lookup_exit", lookup)
     monkeypatch.setattr(direct_check, "scoped_dependencies", lambda *args: object())
-    monkeypatch.setattr(direct_check, "run_cycle", refreshed_cycle)
+    monkeypatch.setattr(direct_check, "measure_cycle", refreshed_cycle)
 
     first = await direct_check.run_trial(settings, production=True)
     second = await direct_check.run_trial(settings, production=True)

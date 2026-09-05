@@ -15,39 +15,87 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 FILES = (
     "Dockerfile", ".dockerignore", ".gitignore", "pyproject.toml", "uv.lock",
-    "README.md", "INSTALL-AGENT.md", "compose.agent.example.yml",
-    "compose.example.yml", "Caddyfile", ".env.agent.example",
-    ".env.collector.example", ".env.compose.example", "agents.example.json",
+    "README.md", "compose.agent.example.yml",
+    "compose.example.yml", "Caddyfile",
+    "examples/.env.agent.example", "examples/.env.collector.example",
+    "examples/.env.compose.example", "examples/.env.standalone.example",
+    "examples/agents.example.json",
     "deploy/com.litechecker.agent.plist", "deploy/litechecker-agent.service",
     "scripts/backup_sqlite.py", "scripts/restore_sqlite.py",
-    "run.sh", "compose.standalone.yml", "compose.telegram-proxy.yml", ".env.standalone.example",
+    "run.sh", "compose.standalone.yml", "compose.telegram-proxy.yml",
     "INSTALL.command", "INSTALL.sh", "INSTALL.bat", "INSTALL.ps1",
     "scripts/install.sh", "scripts/install-wsl.sh", "НАЧНИТЕ-ЗДЕСЬ.txt",
     "scripts/install-macos.sh", "scripts/native-direct.sh",
-    "TRY-DIRECT.command", "scripts/try-direct.sh", "DIRECT-TRIAL.md",
-    "scripts/update.sh", "scripts/prepare-updater.sh", "UPDATES.md", "UPDATE-RELEASES.md",
+    "TRY-DIRECT.command", "scripts/try-direct.sh",
+    "scripts/update.sh", "scripts/prepare-updater.sh",
 )
+PUBLIC_DOC_TREES = ("docs/installation", "docs/operations")
+
+
+def _read_release_input(path: Path) -> bytes:
+    try:
+        relative = path.relative_to(ROOT)
+    except ValueError as exc:
+        raise ValueError("release input must be inside the project") from exc
+    current = ROOT
+    for component in relative.parts[:-1]:
+        current /= component
+        if current.is_symlink() or not current.is_dir():
+            raise ValueError("release input must be a regular file")
+    if path.is_symlink():
+        raise ValueError("release input must be a regular file")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    descriptor = os.open(path, flags)
+    with os.fdopen(descriptor, "rb") as stream:
+        metadata = os.fstat(stream.fileno())
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("release input must be a regular file")
+        return stream.read()
+
+
+def _tree_files(relative: str, *, suffixes: frozenset[str]) -> list[Path]:
+    root = ROOT / relative
+    if root.is_symlink() or not root.is_dir():
+        if relative == "src/litechecker":
+            raise ValueError("release input directory must be a real directory")
+        return []
+    selected: list[Path] = []
+    for directory, dirnames, filenames in os.walk(root, followlinks=False):
+        directory_path = Path(directory)
+        for name in dirnames:
+            if (directory_path / name).is_symlink():
+                raise ValueError("release input must be a regular file")
+        for name in filenames:
+            path = directory_path / name
+            if path.is_symlink():
+                raise ValueError("release input must be a regular file")
+            if path.suffix in suffixes:
+                selected.append(path)
+    return sorted(selected)
 
 
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--with-secrets", action="store_true", help="explicitly include common bot/subscription and optional Telegram proxy for trusted testers")
-    parser.add_argument("--direct-trial", action="store_true", help="write a separately named experimental distribution")
+    parser.add_argument(
+        "--direct-trial",
+        action="store_true",
+        help="compatibility alias; the standard archive already contains TRY-DIRECT.command",
+    )
     arguments = parser.parse_args(argv)
     selected = [ROOT / name for name in FILES]
-    selected += sorted((ROOT / "src/litechecker").glob("*.py"))
-    selected += sorted((ROOT / "src/litechecker/collector").glob("*.py"))
+    selected += _tree_files("src/litechecker", suffixes=frozenset({".py"}))
+    for tree in PUBLIC_DOC_TREES:
+        selected += _tree_files(tree, suffixes=frozenset({".md"}))
     contents = {}
     for path in selected:
-        if path.is_symlink() or not path.is_file():
-            raise ValueError("release input must be a regular file")
-        contents[path.relative_to(ROOT).as_posix()] = path.read_bytes()
+        contents[path.relative_to(ROOT).as_posix()] = _read_release_input(path)
     channel_path = ROOT / "update-channel.json"
     if channel_path.exists() or channel_path.is_symlink():
-        from litechecker.native_install import _read_regular
+        from litechecker.native_runtime import read_bounded_regular
         from litechecker.update_manifest import parse_channel_config
 
-        channel = _read_regular(channel_path)
+        channel = read_bounded_regular(channel_path)
         parse_channel_config(channel)
         contents["update-channel.json"] = channel
     proxy_path = ROOT / "secrets/telegram_proxy_url"
@@ -80,9 +128,9 @@ def main(argv=None) -> None:
     manifest = {name: hashlib.sha256(data).hexdigest() for name, data in contents.items()}
     contents["CONTENTS.sha256.json"] = (json.dumps(manifest, indent=2) + "\n").encode()
     filename = "LiteChecker-READY-PRIVATE.zip" if arguments.with_secrets else "LiteChecker-agent.zip"
-    if arguments.direct_trial:
-        filename = "LiteChecker-DIRECT-TRIAL-PRIVATE.zip" if arguments.with_secrets else "LiteChecker-DIRECT-TRIAL.zip"
     destination = ROOT / "dist" / filename
+    if destination.parent.is_symlink():
+        raise ValueError("release output directory must not be a symbolic link")
     destination.parent.mkdir(exist_ok=True)
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(destination, flags, 0o600 if arguments.with_secrets else 0o644)
@@ -104,7 +152,11 @@ def main(argv=None) -> None:
         for name, expected in manifest.items():
             assert hashlib.sha256(archive.read(f"LiteChecker/{name}")).hexdigest() == expected
     digest = hashlib.sha256(destination.read_bytes()).hexdigest()
-    destination.with_suffix(".zip.sha256").write_text(f"{digest}  {destination.name}\n")
+    checksum_path = destination.with_suffix(".zip.sha256")
+    checksum_descriptor = os.open(checksum_path, flags, 0o600 if arguments.with_secrets else 0o644)
+    with os.fdopen(checksum_descriptor, "w", encoding="utf-8") as checksum:
+        os.fchmod(checksum.fileno(), 0o600 if arguments.with_secrets else 0o644)
+        checksum.write(f"{digest}  {destination.name}\n")
     print(f"archive={destination.name} files={len(contents)} bytes={destination.stat().st_size}")
     print(f"sha256={digest}")
 

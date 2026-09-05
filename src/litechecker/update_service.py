@@ -12,6 +12,15 @@ from litechecker.update_platform import cleanup_platform_images, install_update_
 from litechecker.update_launcher import checked_path
 
 
+async def _cleanup_platform_best_effort(root: Path, result: dict) -> dict:
+    try:
+        await cleanup_platform_images(root)
+    except Exception:
+        result = dict(result)
+        result.setdefault("warning", "platform-cleanup-failed")
+    return result
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("check", "status", "enable", "disable", "cleanup", "configure", "schedule", "install-schedule", "start", "stop", "probe"))
@@ -38,12 +47,12 @@ def main(argv=None) -> int:
             return 0
         if args.action == "configure":
             from litechecker.updater import initialize_channel
-            from litechecker.native_install import _read_regular
+            from litechecker.native_runtime import read_bounded_regular
             if args.channel is None:
                 raise ValueError
             path = args.channel.absolute()
             checked_path(path.parent, path, regular=True)
-            initialize_channel(root, _read_regular(path))
+            initialize_channel(root, read_bounded_regular(path))
             print('{"status":"configured"}')
             return 0
         from litechecker.updater import check_for_update, set_updates_enabled, update_status
@@ -56,13 +65,13 @@ def main(argv=None) -> int:
         elif args.action == "cleanup":
             from litechecker.updater import cleanup_updates
             result = cleanup_updates(root)
-            asyncio.run(cleanup_platform_images(root))
+            result = asyncio.run(_cleanup_platform_best_effort(root, result))
         elif status.get("status") == "unconfigured":
             result = status
         else:
             result = asyncio.run(check_for_update(root, platform_adapter(root), force=args.force))
             if result.get("status") in {"updated", "rolled-back", "current"}:
-                asyncio.run(cleanup_platform_images(root))
+                result = asyncio.run(_cleanup_platform_best_effort(root, result))
         print(json.dumps(result, ensure_ascii=True, sort_keys=True))
         return 1 if result.get("status") in {"failed", "rolled-back"} else 0
     except Exception:

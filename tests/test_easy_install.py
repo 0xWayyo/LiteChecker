@@ -242,6 +242,20 @@ def test_wsl_migration_excludes_foreign_device_state_and_unknown_files(bundle, l
     assert (installed / "secrets/telegram_bot_token").stat().st_mode & 0o777 == 0o600
 
 
+def test_wsl_migration_recursively_installs_nested_runtime_modules(bundle, local_env):
+    nested = bundle / "src/litechecker/diagnostics/platform/linux.py"
+    nested.parent.mkdir(parents=True)
+    nested.write_text("NESTED_RUNTIME = True\n")
+
+    result = launch(bundle, local_env, "scripts/install-wsl.sh", str(bundle))
+
+    assert result.returncode == 0, result.stderr
+    installed = Path(local_env["HOME"]) / "LiteChecker"
+    assert (
+        installed / "src/litechecker/diagnostics/platform/linux.py"
+    ).read_text() == "NESTED_RUNTIME = True\n"
+
+
 def test_wsl_repeat_preserves_local_state_config_and_secrets(bundle, local_env):
     installed = Path(local_env["HOME"]) / "LiteChecker"
     (installed / "state/standalone").mkdir(parents=True)

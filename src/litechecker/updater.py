@@ -76,16 +76,20 @@ def _closed(
     *,
     error: str | None = None,
     cleanup: dict[str, int] | None = None,
+    warning: str | None = None,
 ) -> dict:
     state = state or {}
     bounded_error = error[:ERROR_LIMIT] if error else None
-    return {
+    result = {
         "status": status,
         "version": state.get("active"),
         "previous": state.get("previous"),
         "error": bounded_error,
         "cleanup": cleanup or {"releases": 0, "temporary": 0},
     }
+    if warning:
+        result["warning"] = warning[:ERROR_LIMIT]
+    return result
 
 
 def _read_file_bounded(path: Path, limit: int) -> bytes:
@@ -343,12 +347,20 @@ def _with_cleanup(
     now: datetime,
     *,
     error: str | None = None,
+    remove_version: str | None = None,
 ) -> dict:
+    warning = None
+    if remove_version is not None:
+        try:
+            store.remove_release(remove_version)
+        except Exception:
+            warning = "update-cleanup-failed"
     try:
         counts = store.cleanup(active=state["active"], previous=state["previous"], now=now)
-    except (OSError, StoreError):
+    except Exception:
         counts = {"releases": 0, "temporary": 0}
-    return _closed(status, state, error=error, cleanup=counts)
+        warning = "update-cleanup-failed"
+    return _closed(status, state, error=error, cleanup=counts, warning=warning)
 
 
 async def _recover(
@@ -386,9 +398,14 @@ async def _recover(
     state["pending"] = None
     state["failed"] = {"sequence": pending["sequence"], "digest": pending["digest"]}
     _write_outcome(store, state, "rolled-back", "interrupted update was rolled back")
-    store.remove_release(candidate)
-    counts = store.cleanup(active=state["active"], previous=state["previous"], now=now)
-    return _closed("rolled-back", state, error=state["error"], cleanup=counts)
+    return _with_cleanup(
+        store,
+        state,
+        "rolled-back",
+        now,
+        error=state["error"],
+        remove_version=candidate,
+    )
 
 
 async def check_for_update(
@@ -598,8 +615,7 @@ async def check_for_update(
             maintenance.release()
 
         if committed:
-            counts = store.cleanup(active=state["active"], previous=state["previous"], now=checked_at)
-            return _closed("updated", state, cleanup=counts)
+            return _with_cleanup(store, state, "updated", checked_at)
         if rollback_ok:
             rolled_back_state = copy.deepcopy(state)
             rolled_back_state["pending"] = None
@@ -624,9 +640,14 @@ async def check_for_update(
                     error="previous release restored; recovery journal remains pending",
                 )
             state = rolled_back_state
-            store.remove_release(release.version)
-            counts = store.cleanup(active=state["active"], previous=state["previous"], now=checked_at)
-            return _closed("rolled-back", state, error=state["error"], cleanup=counts)
+            return _with_cleanup(
+                store,
+                state,
+                "rolled-back",
+                checked_at,
+                error=state["error"],
+                remove_version=release.version,
+            )
         _write_outcome(store, state, "failed", "activation and rollback failed; recovery remains pending")
         return _closed("failed", state, error=state["error"])
     except asyncio.CancelledError:

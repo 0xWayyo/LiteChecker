@@ -21,19 +21,72 @@ require_source_directory() {
 require_destination_directory() {
     [[ ! -L "$1" && ( ! -e "$1" || -d "$1" ) ]] || die 'Каталог canonical установки небезопасен.'
 }
-for directory in "$source_root/scripts" "$source_root/src" "$source_root/src/litechecker" "$source_root/src/litechecker/collector"; do
+for directory in "$source_root/scripts" "$source_root/src" "$source_root/src/litechecker"; do
     require_source_directory "$directory"
 done
-for directory in "$root/scripts" "$root/src" "$root/src/litechecker" "$root/src/litechecker/collector" "$launch_agents"; do
+for directory in "$root" "$launch_agents"; do
     require_destination_directory "$directory"
 done
 
 manifest="$source_root/CONTENTS.sha256.json"
-[[ ! -L "$manifest" && -f "$manifest" ]] || die 'Не найден безопасный CONTENTS.sha256.json пакета.'
+[[ ! -L "$manifest" && -f "$manifest" ]] || die 'Не найден проверочный manifest архива. Скачайте прикреплённый клиентский ZIP (не архив Source code) по адресу https://github.com/0xWayyo/LiteChecker/releases/latest и распакуйте его; затем запускайте установку из распакованной папки.'
+
+validate_relative() {
+    local relative=$1 component
+    [[ "$relative" =~ ^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ ]] \
+        || die "Недопустимый путь файла установки: $relative"
+    IFS='/' read -r -a components <<< "$relative"
+    for component in "${components[@]}"; do
+        [[ "$component" != . && "$component" != .. ]] \
+            || die "Недопустимый путь файла установки: $relative"
+    done
+}
+
+require_source_file() {
+    local relative=$1 current="$source_root" component index
+    validate_relative "$relative"
+    IFS='/' read -r -a components <<< "$relative"
+    for ((index = 0; index < ${#components[@]} - 1; index++)); do
+        component=${components[index]}
+        current="$current/$component"
+        [[ ! -L "$current" && -d "$current" ]] \
+            || die "Каталог файла установки отсутствует или небезопасен: $relative"
+    done
+    [[ ! -L "$source_root/$relative" && -f "$source_root/$relative" ]] \
+        || die "Файл установки отсутствует или небезопасен: $relative"
+}
+
+validate_destination() {
+    local relative=$1 current="$root" component index outgoing="$root/$relative"
+    IFS='/' read -r -a components <<< "$relative"
+    for ((index = 0; index < ${#components[@]} - 1; index++)); do
+        component=${components[index]}
+        current="$current/$component"
+        if [[ -e "$current" || -L "$current" ]]; then
+            [[ ! -L "$current" && -d "$current" ]] \
+                || die "Каталог canonical установки небезопасен: $relative"
+        fi
+    done
+    [[ ! -L "$outgoing" && ( ! -e "$outgoing" || -f "$outgoing" ) ]] \
+        || die "Файл canonical установки небезопасен: $relative"
+}
+
+ensure_destination_parent() {
+    local relative=$1 current="$root" component index
+    IFS='/' read -r -a components <<< "$relative"
+    for ((index = 0; index < ${#components[@]} - 1; index++)); do
+        component=${components[index]}
+        current="$current/$component"
+        if [[ ! -e "$current" ]]; then
+            mkdir "$current"
+        fi
+        chmod 700 "$current"
+    done
+}
 
 verify_payload() {
     local relative=$1 incoming="$source_root/$1" expected actual
-    [[ ! -L "$incoming" && -f "$incoming" ]] || die "Файл установки отсутствует или небезопасен: $relative"
+    require_source_file "$relative"
     expected=$(awk -v key="\"$relative\":" '$1 == key {value=$2; gsub(/[\",]/, "", value); print value}' "$manifest")
     [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || die "Файл не описан однозначно в manifest: $relative"
     actual=$(shasum -a 256 "$incoming")
@@ -41,51 +94,43 @@ verify_payload() {
     [[ "$actual" == "$expected" ]] || die "Контрольная сумма файла не совпала: $relative"
 }
 
-payload=(pyproject.toml uv.lock run.sh compose.standalone.yml compose.telegram-proxy.yml scripts/native-direct.sh scripts/install-macos.sh)
-for relative in scripts/update.sh scripts/prepare-updater.sh update-channel.json UPDATES.md; do
+payload=(pyproject.toml uv.lock run.sh scripts/native-direct.sh scripts/install-macos.sh)
+for relative in scripts/update.sh scripts/prepare-updater.sh update-channel.json docs/operations/updates.md; do
     if [[ -e "$source_root/$relative" || -L "$source_root/$relative" ]]; then
         payload+=("$relative")
     fi
 done
-for incoming in "$source_root"/src/litechecker/*.py "$source_root"/src/litechecker/collector/*.py; do
-    [[ -e "$incoming" ]] || continue
+linked_runtime=$(find "$source_root/src/litechecker" -type l -print -quit)
+[[ -z "$linked_runtime" ]] || die 'Исходное дерево Python не должно содержать символические ссылки.'
+while IFS= read -r -d '' incoming; do
     payload+=("${incoming#"$source_root"/}")
-done
+done < <(find "$source_root/src/litechecker" -type f -name '*.py' -print0)
 for relative in "${payload[@]}"; do
     verify_payload "$relative"
+    validate_destination "$relative"
 done
 
-mkdir -p "$root/scripts" "$root/src/litechecker/collector" "$launch_agents"
-chmod 700 "$root" "$root/scripts" "$root/src" "$root/src/litechecker" "$root/src/litechecker/collector"
+mkdir -p "$root" "$launch_agents"
+chmod 700 "$root" "$launch_agents"
 
 copy_payload() {
     local relative=$1 incoming="$source_root/$1" outgoing="$root/$1"
-    [[ ! -L "$incoming" && -f "$incoming" ]] || die "Файл установки отсутствует или небезопасен: $relative"
-    [[ ! -L "$outgoing" ]] || die "Файл canonical установки не должен быть ссылкой: $relative"
+    ensure_destination_parent "$relative"
     cp -p -- "$incoming" "$outgoing"
+    case "$relative" in
+      run.sh|scripts/*.sh) chmod 700 "$outgoing" ;;
+      *) chmod 600 "$outgoing" ;;
+    esac
 }
 
-for relative in pyproject.toml uv.lock run.sh scripts/native-direct.sh scripts/install-macos.sh; do
+for relative in "${payload[@]}"; do
     copy_payload "$relative"
 done
 for relative in scripts/update.sh scripts/prepare-updater.sh; do
-    if [[ -f "$source_root/$relative" ]]; then
-        copy_payload "$relative"
+    if [[ -f "$root/$relative" ]]; then
         chmod 700 "$root/$relative"
     fi
 done
-if [[ -f "$source_root/UPDATES.md" ]]; then
-    copy_payload UPDATES.md
-    chmod 600 "$root/UPDATES.md"
-fi
-for incoming in "$source_root"/src/litechecker/*.py "$source_root"/src/litechecker/collector/*.py; do
-    [[ -e "$incoming" ]] || continue
-    relative=${incoming#"$source_root"/}
-    copy_payload "$relative"
-done
-chmod 700 "$root/run.sh" "$root/scripts/native-direct.sh" "$root/scripts/install-macos.sh"
-find "$root/src" -type f -exec chmod 600 {} +
-chmod 600 "$root/pyproject.toml" "$root/uv.lock"
 
 printf '%s\n' 'Подготавливаю закреплённые Python, зависимости и Xray для DIRECT.'
 bash "$root/scripts/native-direct.sh" prepare --root "$root"
@@ -144,7 +189,7 @@ fi
 bash "$root/scripts/native-direct.sh" status
 if [[ -f "$root/.updates/channel.json" && -f "$root/scripts/update.sh" ]]; then
     if ! bash "$root/scripts/update.sh" schedule; then
-        printf '%s\n' 'Внимание: чекер запущен, но планировщик обновлений не установлен. См. UPDATES.md.' >&2
+        printf '%s\n' 'Внимание: чекер запущен, но планировщик обновлений не установлен. См. docs/operations/updates.md.' >&2
     fi
 fi
 printf '\n%s\n' 'LiteChecker DIRECT установлен и запущен без Docker.'

@@ -100,6 +100,155 @@ async def test_native_activation_selects_release_code_but_original_data(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_native_install_and_update_activation_share_direct_plist_schema(tmp_path):
+    from litechecker.native_install import install_configuration
+    from litechecker.update_platform import NativeUpdateAdapter, record_desired_running
+
+    root, _ = installation(tmp_path)
+    file(
+        root / "state/native-direct/device.json",
+        json.dumps({"agent_id": "device-" + "a" * 32, "state_key": "k" * 32}),
+    )
+    source = tmp_path / "source"
+    source.mkdir()
+    installed_plist = tmp_path / "InstalledAgents/com.litechecker.direct.plist"
+    install_configuration(source, root, installed_plist)
+    installed = plistlib.loads(installed_plist.read_bytes())
+
+    runner = Runner()
+    updated_agents = tmp_path / "UpdatedAgents"
+    adapter = NativeUpdateAdapter(root, runner=runner, launch_agents=updated_agents)
+    record_desired_running(root, False, system="Darwin")
+    await adapter.activate(root, False)
+    updated = plistlib.loads((updated_agents / "com.litechecker.direct.plist").read_bytes())
+
+    assert updated == installed
+    assert updated["ProgramArguments"] == [
+        str(root / ".native-direct/venv/bin/python"),
+        "-m",
+        "litechecker.direct_service",
+        "--root",
+        str(root),
+        "--xray",
+        str(root / ".native-direct/xray"),
+    ]
+    assert updated["EnvironmentVariables"] == {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPATH": str(root / "src"),
+        "PYTHONUNBUFFERED": "1",
+    }
+
+
+def test_native_paths_honor_launch_agents_override_for_service_and_schedule(
+    tmp_path, monkeypatch
+):
+    import base64
+    from litechecker import update_platform
+    from litechecker.native_runtime import (
+        direct_service_plist_path,
+        launch_agents_directory,
+        updater_plist_path,
+    )
+
+    root, _ = installation(tmp_path)
+    file(root / "src/litechecker/update_launcher.py")
+    file(
+        root / ".updates/channel.json",
+        json.dumps({
+            "schema": 1,
+            "enabled": True,
+            "public_key": base64.b64encode(b"k" * 32).decode(),
+            "manifest_urls": ["https://updates.example/manifest.json"],
+        }),
+    )
+    launch_agents = tmp_path / "Custom LaunchAgents"
+    monkeypatch.setenv("LITECHECKER_LAUNCH_AGENTS_DIR", str(launch_agents))
+    monkeypatch.setattr(update_platform.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(
+        update_platform.subprocess,
+        "run",
+        lambda *args, **kwargs: type("Result", (), {"returncode": 0})(),
+    )
+
+    adapter = update_platform.NativeUpdateAdapter(root)
+    update_platform.install_update_schedule(root)
+
+    assert launch_agents_directory() == launch_agents
+    assert adapter.plist == direct_service_plist_path()
+    assert updater_plist_path().is_file()
+    assert updater_plist_path().parent == launch_agents
+
+
+def test_native_schedule_persists_absolute_launch_agents_for_later_adapter(
+    tmp_path, monkeypatch
+):
+    import base64
+    from litechecker import update_platform
+
+    root, _ = installation(tmp_path)
+    file(root / "src/litechecker/update_launcher.py")
+    file(
+        root / ".updates/channel.json",
+        json.dumps({
+            "schema": 1,
+            "enabled": True,
+            "public_key": base64.b64encode(b"k" * 32).decode(),
+            "manifest_urls": ["https://updates.example/manifest.json"],
+        }),
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LITECHECKER_LAUNCH_AGENTS_DIR", "Custom LaunchAgents")
+    monkeypatch.setattr(update_platform.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(
+        update_platform.subprocess,
+        "run",
+        lambda *args, **kwargs: type("Result", (), {"returncode": 0})(),
+    )
+
+    update_platform.install_update_schedule(root)
+
+    launch_agents = tmp_path / "Custom LaunchAgents"
+    scheduled = plistlib.loads(
+        (launch_agents / "com.litechecker.updater.plist").read_bytes()
+    )
+    scheduled_environment = scheduled["EnvironmentVariables"]
+    persisted = scheduled_environment["LITECHECKER_LAUNCH_AGENTS_DIR"]
+    assert Path(persisted).is_absolute()
+    assert Path(persisted) == launch_agents
+
+    monkeypatch.delenv("LITECHECKER_LAUNCH_AGENTS_DIR")
+    for key, value in scheduled_environment.items():
+        monkeypatch.setenv(key, value)
+    restarted = update_platform.NativeUpdateAdapter(root)
+    assert restarted.plist == launch_agents / "com.litechecker.direct.plist"
+
+
+@pytest.mark.asyncio
+async def test_native_activation_rejects_symlinked_launch_agents_ancestor_before_commands(
+    tmp_path,
+):
+    from litechecker.update_platform import NativeUpdateAdapter, UpdatePlatformError
+
+    root, _ = installation(tmp_path)
+    actual_parent = tmp_path / "actual-parent"
+    actual_parent.mkdir()
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(actual_parent, target_is_directory=True)
+    runner = Runner()
+    adapter = NativeUpdateAdapter(
+        root,
+        runner=runner,
+        launch_agents=linked_parent / "LaunchAgents",
+    )
+
+    with pytest.raises(UpdatePlatformError, match="native-activation-failed"):
+        await adapter.activate(root, False)
+
+    assert runner.calls == []
+    assert not (actual_parent / "LaunchAgents/com.litechecker.direct.plist").exists()
+
+
+@pytest.mark.asyncio
 async def test_user_stop_during_activation_is_not_overridden(tmp_path):
     from litechecker.update_platform import NativeUpdateAdapter, record_desired_running
     root, release = installation(tmp_path)
@@ -200,8 +349,31 @@ def test_missing_channel_schedule_has_no_filesystem_or_command_side_effects(tmp_
 async def test_command_timeout_reaps_owned_process_and_returns_closed_failure(tmp_path):
     import sys
     from litechecker.update_platform import run_command, UpdatePlatformError
-    with pytest.raises(UpdatePlatformError, match="update-command-failed"):
+    with pytest.raises(UpdatePlatformError, match="update-command-failed") as raised:
         await run_command([sys.executable, "-c", "import time; time.sleep(5)"], timeout=0.05)
+    assert raised.value.operation == "python"
+    assert raised.value.reason == "timeout"
+    assert raised.value.exit_code is None
+
+
+@pytest.mark.asyncio
+async def test_nonzero_command_error_has_only_closed_diagnostics(tmp_path):
+    from litechecker.update_platform import CommandResult, NativeUpdateAdapter, UpdatePlatformError
+
+    root, _ = installation(tmp_path)
+
+    async def fail(args, **kwargs):
+        return CommandResult(7, "https://secret.invalid/token")
+
+    adapter = NativeUpdateAdapter(root, runner=fail, launch_agents=tmp_path / "LaunchAgents")
+    with pytest.raises(UpdatePlatformError, match="update-command-failed") as raised:
+        await adapter._run(["/private/secret-tool", "--token=secret"])
+
+    assert str(raised.value) == "update-command-failed"
+    assert raised.value.operation == "owned-command"
+    assert raised.value.reason == "nonzero-exit"
+    assert raised.value.exit_code == 7
+    assert "secret" not in repr(raised.value.__dict__)
 
 
 @pytest.mark.asyncio

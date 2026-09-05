@@ -23,31 +23,12 @@ from litechecker.direct_check import TrialResult, run_trial
 from litechecker.direct_outbox import DirectOutbox, DirectOutboxError
 from litechecker.direct_reporting import format_unavailable
 from litechecker.maintenance import cycle_maintenance
+from litechecker.native_config import NATIVE_CONFIG_KEYS
 from litechecker.runtime import run_with_signals
 from litechecker.state import _atomic_write_json
 
 
 _INTERVAL_SECONDS = 600
-_NATIVE_CONFIG_KEYS = frozenset(
-    {
-        "LC_AGENT_CITY",
-        "LC_AGENT_NAME",
-        "LC_HOST_NAME",
-        "LC_HOST_OS",
-        "LC_TELEGRAM_CHAT_ID",
-        "LC_TELEGRAM_TOPIC_ID",
-        "LC_INTERVAL_SECONDS",
-        "LC_RUN_DEADLINE_SECONDS",
-        "LC_PROBE_TIMEOUT_SECONDS",
-        "LC_TCP_TIMEOUT_SECONDS",
-        "LC_MAX_CONCURRENCY",
-        "LC_MAX_SUBSCRIPTION_BYTES",
-        "LC_MAX_ENDPOINTS",
-        "LC_AUTO_NETWORK",
-        "LC_AUTO_CITY",
-        "LC_EXPECTED_XRAY_VERSION",
-    }
-)
 
 
 class ServiceAlreadyRunning(RuntimeError):
@@ -69,7 +50,7 @@ def service_settings(
     _validate_xray(xray_path)
     try:
         raw = json.loads(_read_secure_text(root / "native-settings.json"))
-        if not isinstance(raw, dict) or not set(raw).issubset(_NATIVE_CONFIG_KEYS):
+        if not isinstance(raw, dict) or not set(raw).issubset(NATIVE_CONFIG_KEYS):
             raise ValueError
         env = {key: _config_value(value) for key, value in raw.items()}
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):

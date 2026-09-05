@@ -1,33 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if ! test "$#" -eq 0; then
-  echo "usage: verify-release.sh" >&2
+if test "$#" -gt 1; then
+  echo "usage: verify-release.sh [offline|live]" >&2
   exit 64
 fi
 
 export UV_CACHE_DIR="${UV_CACHE_DIR:-/tmp/litechecker-release-uv-cache}"
 
-RELEASE_MODE="${LC_RELEASE_MODE:-release}"
+RELEASE_MODE="${1:-offline}"
 case "$RELEASE_MODE" in
-  release)
-    if ! test "${LC_RELEASE_REAL_SMOKE:-0}" = "1"; then
-      echo "release-live-smoke-required" >&2
-      exit 1
-    fi
+  offline)
+    DO_LIVE_CHECKS=0
+    ;;
+  live)
     if ! docker info >/dev/null 2>&1; then
       echo "release-docker-required" >&2
       exit 1
     fi
-    DOCKER_AVAILABLE=1
-    ;;
-  development-offline)
-    echo "NON_RELEASE_DEVELOPMENT_VERIFICATION: live aggregate smoke is not a release gate" >&2
-    if docker info >/dev/null 2>&1; then
-      DOCKER_AVAILABLE=1
-    else
-      DOCKER_AVAILABLE=0
-    fi
+    DO_LIVE_CHECKS=1
     ;;
   *)
     echo "verification-mode-invalid" >&2
@@ -44,27 +35,26 @@ fi
 if git grep -I -q -E 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|lc_[A-Za-z0-9_-]{43}|[0-9]{6,20}:[A-Za-z0-9_-]{30,}' -- \
   Dockerfile .dockerignore pyproject.toml uv.lock README.md Caddyfile \
   compose.example.yml compose.agent.example.yml \
-  .env.agent.example .env.collector.example .env.compose.example \
-  agents.example.json deploy scripts src; then
+  docs examples deploy scripts src; then
   echo "tracked-secret-pattern-detected" >&2
   exit 1
 fi
 
-uv sync --all-groups --frozen
-uv run pytest
-uv run python -m compileall -q src tests
-uv build
-uv run python scripts/check_release_artifacts.py
-uv run litechecker --help >/dev/null
-uv run litechecker agent --help >/dev/null
-uv run litechecker collector --help >/dev/null
-uv run litechecker agent-health --help >/dev/null
-uv run litechecker-smoke-subscription --help >/dev/null
-docker compose -f compose.example.yml config --no-interpolate -q
-docker compose -f compose.agent.example.yml config --no-interpolate -q
-uv run python -c 'import xml.etree.ElementTree as ET; ET.parse("deploy/com.litechecker.agent.plist")'
+uv sync --all-groups --all-extras --frozen
+uv run --no-sync pytest
+uv run --no-sync python -m compileall -q src tests
+uv build --offline
+uv run --no-sync python scripts/check_release_artifacts.py
+uv run --no-sync litechecker --help >/dev/null
+uv run --no-sync litechecker agent --help >/dev/null
+uv run --no-sync litechecker collector --help >/dev/null
+uv run --no-sync litechecker agent-health --help >/dev/null
+uv run --no-sync litechecker-smoke-subscription --help >/dev/null
+uv run --no-sync python -c 'import xml.etree.ElementTree as ET; ET.parse("deploy/com.litechecker.agent.plist")'
 
-if test "$DOCKER_AVAILABLE" = "1"; then
+if test "$DO_LIVE_CHECKS" = "1"; then
+  docker compose -f compose.example.yml config --no-interpolate -q
+  docker compose -f compose.agent.example.yml config --no-interpolate -q
   docker build --pull --tag litechecker:release-check .
   # caddy validate uses the pinned runtime image and placeholder-only config.
   docker run --rm \
@@ -77,14 +67,5 @@ if test "$DOCKER_AVAILABLE" = "1"; then
     litechecker:release-check -c \
     'import asyncio; from litechecker.agent import query_xray_version; r=asyncio.run(query_xray_version("/usr/local/bin/xray", expected_version="26.3.27")); assert r.compatible and r.version == "26.3.27"'
   docker run --rm litechecker:release-check --help >/dev/null
-else
-  echo "NON_RELEASE_DEVELOPMENT_VERIFICATION: docker checks skipped" >&2
-fi
-
-if test "${LC_RELEASE_REAL_SMOKE:-0}" = "1"; then
-  uv run litechecker-smoke-subscription --probe
-fi
-
-if test "$RELEASE_MODE" = "development-offline"; then
-  echo "NON_RELEASE_DEVELOPMENT_VERIFICATION_COMPLETE: NOT A RELEASE PASS" >&2
+  uv run --no-sync litechecker-smoke-subscription --probe
 fi

@@ -5,23 +5,30 @@ from __future__ import annotations
 import json
 import importlib.util
 import os
+import posixpath
 import re
+import shutil
 import sqlite3
 import subprocess
+import sys
 import tarfile
+import tomllib
 import zipfile
 import xml.etree.ElementTree as ET
 from fnmatch import fnmatch
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import yaml
 import pytest
 
 from litechecker.collector.auth import AgentRegistry, RegistryError
 from litechecker.security import is_valid_agent_id
+from litechecker.update_store import validate_source_zip
 
 
 ROOT = Path(__file__).resolve().parents[1]
+OPERATIONS_GUIDE = ROOT / "docs/operations/full-reference.md"
 _RESTORE_SPEC = importlib.util.spec_from_file_location(
     "restore_sqlite", ROOT / "scripts/restore_sqlite.py"
 )
@@ -31,11 +38,21 @@ _RESTORE_SPEC.loader.exec_module(restore_sqlite)
 
 
 def _readme_bash_block(marker: str) -> str:
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    readme = OPERATIONS_GUIDE.read_text(encoding="utf-8")
     return next(
         block
         for block in re.findall(r"```bash\n(.*?)\n```", readme, flags=re.DOTALL)
         if marker in block
+    )
+
+
+def _checkout_packaging_block() -> str:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    section = readme.split("## Сборка из checkout", 1)[1].split("\n## ", 1)[0]
+    return next(
+        block
+        for block in re.findall(r"```bash\n(.*?)\n```", section, flags=re.DOTALL)
+        if "scripts/package_agent.py" in block
     )
 
 
@@ -103,6 +120,28 @@ def test_container_venv_keeps_launcher_interpreter_at_the_same_absolute_path(tmp
     assert (staged_root / shebang.lstrip("/")).is_file()
 
 
+def test_container_explicitly_installs_the_collector_dependency_extra():
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    sync = next(line for line in dockerfile.splitlines() if line.startswith("RUN uv sync"))
+
+    assert "--extra collector" in sync
+
+
+def test_web_stack_is_an_explicit_collector_extra_and_version_is_candidate():
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
+        "project"
+    ]
+
+    assert project["version"] == "0.3.0"
+    assert not {"fastapi", "uvicorn"} & {
+        requirement.split("[", 1)[0].split("=", 1)[0].split("<", 1)[0]
+        for requirement in project["dependencies"]
+    }
+    collector = "\n".join(project["optional-dependencies"]["collector"])
+    assert "fastapi" in collector
+    assert "uvicorn[standard]" in collector
+
+
 def test_docker_context_is_fail_closed_for_secrets_and_build_artifacts():
     """A newly created local secret must not silently enter the Docker context."""
     excluded = (
@@ -132,9 +171,6 @@ def test_docker_context_is_fail_closed_for_secrets_and_build_artifacts():
         "uv.lock",
         "src/litechecker/cli.py",
         "src/litechecker/collector/app.py",
-        ".env.agent.example",
-        ".env.collector.example",
-        "agents.example.json",
         "compose.example.yml",
         "deploy/litechecker-agent.service",
         "README.md",
@@ -146,7 +182,7 @@ def test_docker_context_is_fail_closed_for_secrets_and_build_artifacts():
 
 def test_host_services_use_documented_installed_python_xray_and_state_paths():
     """A host unit must invoke the venv that the bootstrap guide actually creates."""
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    readme = OPERATIONS_GUIDE.read_text(encoding="utf-8")
     systemd = (ROOT / "deploy/litechecker-agent.service").read_text(encoding="utf-8")
     assert (
         "ExecStart=/opt/litechecker/.venv/bin/python -m litechecker.cli agent"
@@ -190,7 +226,7 @@ def test_host_services_use_documented_installed_python_xray_and_state_paths():
 
 def test_host_bootstrap_pins_downloads_and_has_no_abstract_install_paths():
     """A fresh-host guide must name verifiable artifacts, not imaginary local paths."""
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    readme = OPERATIONS_GUIDE.read_text(encoding="utf-8")
     assert "/path/to/xray" not in readme
     assert "/absolute/path/to/dist" not in readme
     assert "https://github.com/XTLS/Xray-core/releases/download/v26.3.27/" in readme
@@ -200,7 +236,7 @@ def test_host_bootstrap_pins_downloads_and_has_no_abstract_install_paths():
 
 def test_host_bootstraps_use_frozen_source_sync_at_the_service_venv():
     """Host installs must not resolve wheel dependencies outside the committed lock."""
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    readme = OPERATIONS_GUIDE.read_text(encoding="utf-8")
     linux = _readme_bash_block("Xray-linux-64.zip")
     macos = _readme_bash_block("Xray-macos-64.zip")
 
@@ -228,7 +264,7 @@ def test_host_bootstraps_use_frozen_source_sync_at_the_service_venv():
 
 def test_docker_bootstrap_uses_mount_owner_identity_on_both_platforms():
     """Explicit host identity keeps strict owner checks portable without a global relaxation."""
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    readme = OPERATIONS_GUIDE.read_text(encoding="utf-8")
     docker = readme.split("## Первый запуск в Docker", 1)[1].split(
         "## Добавление второго города", 1
     )[0]
@@ -352,14 +388,14 @@ def test_dockerfile_frontend_is_pinned_by_verified_manifest_digest():
 def test_tracked_examples_are_intentionally_invalid_until_replaced(tmp_path):
     """Copying an example unchanged must fail closed rather than enroll a public token."""
     registry = tmp_path / "agents.json"
-    registry.write_bytes((ROOT / "agents.example.json").read_bytes())
+    registry.write_bytes((ROOT / "examples/agents.example.json").read_bytes())
     registry.chmod(0o600)
     with pytest.raises(RegistryError):
         AgentRegistry.load(registry)
 
-    agent_env = (ROOT / ".env.agent.example").read_text(encoding="utf-8")
-    collector_env = (ROOT / ".env.collector.example").read_text(encoding="utf-8")
-    compose_env = (ROOT / ".env.compose.example").read_text(encoding="utf-8")
+    agent_env = (ROOT / "examples/.env.agent.example").read_text(encoding="utf-8")
+    collector_env = (ROOT / "examples/.env.collector.example").read_text(encoding="utf-8")
+    compose_env = (ROOT / "examples/.env.compose.example").read_text(encoding="utf-8")
     agent_placeholder = re.search(r"^LC_AGENT_ID=(.+)$", agent_env, re.MULTILINE)
     assert agent_placeholder is not None
     assert is_valid_agent_id(agent_placeholder.group(1)) is False
@@ -545,7 +581,7 @@ def test_built_archives_contain_only_explicit_release_members(tmp_path):
         else:
             with tarfile.open(archive) as bundle:
                 members.extend(bundle.getnames())
-    forbidden = (".superpowers", ".worktrees", "secrets", "tests/", ".diff", "task-7-report")
+    forbidden = (".superpowers", ".worktrees", "secrets", "tests/", ".diff", ".report")
     assert all(not any(token in member for token in forbidden) for member in members)
     assert any(member.endswith("src/litechecker/agent.py") for member in members)
     assert any(member == "litechecker/agent.py" for member in members)
@@ -555,24 +591,116 @@ def test_built_archives_contain_only_explicit_release_members(tmp_path):
     assert any(member == "litechecker/collector/reporting.py" for member in members)
 
 
+def test_documented_checkout_packaging_workflow_builds_a_valid_archive(tmp_path):
+    checkout = tmp_path / "checkout"
+    shutil.copytree(
+        ROOT,
+        checkout,
+        ignore=shutil.ignore_patterns(
+            ".git", ".venv", ".pytest_cache", "__pycache__", "dist"
+        ),
+    )
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    _write_stub(
+        tools,
+        "uv",
+        """case "$1" in
+sync)
+  shift
+  test "$*" = "--frozen --no-dev" || exit 31
+  : > .locked-environment-ready
+  ;;
+run)
+  shift
+  test "$1" = "--frozen" || exit 32
+  shift
+  test "$1" = "--no-dev" || exit 36
+  shift
+  test -f .locked-environment-ready || exit 33
+  test "$1" = python || exit 34
+  shift
+  PYTHONPATH="$PWD/src" exec "$TEST_PYTHON" "$@"
+  ;;
+*) exit 35;;
+esac""",
+    )
+
+    result = subprocess.run(
+        ["bash", "-eu", "-c", _checkout_packaging_block()],
+        cwd=checkout,
+        env={
+            **os.environ,
+            "PATH": f"{tools}:/usr/bin:/bin",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "TEST_PYTHON": sys.executable,
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    archive = checkout / "dist/LiteChecker-agent.zip"
+    validated = validate_source_zip(archive.read_bytes())
+    assert validated.sha256
+    assert any(file.path.as_posix() == "README.md" for file in validated.files)
+
+
+def test_client_markdown_links_resolve_inside_archive_or_use_https():
+    packager_path = ROOT / "scripts/package_agent.py"
+    spec = importlib.util.spec_from_file_location("client_packager", packager_path)
+    assert spec is not None and spec.loader is not None
+    packager = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(packager)
+
+    inventory = set(packager.FILES)
+    for tree in packager.PUBLIC_DOC_TREES:
+        inventory.update(
+            path.relative_to(ROOT).as_posix()
+            for path in (ROOT / tree).rglob("*.md")
+            if path.is_file()
+        )
+
+    for source_name in sorted(name for name in inventory if name.endswith(".md")):
+        source = ROOT / source_name
+        body = source.read_text(encoding="utf-8")
+        for raw_target in re.findall(r"\[[^\]]+\]\(([^)]+)\)", body):
+            target = urlsplit(raw_target)
+            if target.scheme:
+                assert target.scheme == "https", f"unsafe link in {source_name}: {raw_target}"
+                continue
+            if not target.path:
+                continue
+            resolved = posixpath.normpath(
+                posixpath.join(posixpath.dirname(source_name), target.path)
+            )
+            resolves_to_directory = any(
+                member.startswith(resolved.rstrip("/") + "/") for member in inventory
+            )
+            assert resolved in inventory or resolves_to_directory, (
+                f"client link escapes the archive inventory: {source_name} -> {raw_target}"
+            )
+
+
 def test_release_verifier_is_tracked_closed_and_covers_release_boundary():
     """A durable verifier must not accept/echo secrets and must retain all release checks."""
     verifier = ROOT / "scripts/verify-release.sh"
     body = verifier.read_text(encoding="utf-8")
     assert verifier.stat().st_mode & 0o111
-    assert 'test "$#" -eq 0' in body
+    assert "usage: verify-release.sh [offline|live]" in body
     for command in (
         "git status --porcelain",
         "git grep",
-        "uv sync --all-groups --frozen",
-        "uv run pytest",
-        "uv run python -m compileall",
-        "uv build",
+        "uv sync --all-groups --all-extras --frozen",
+        "uv run --no-sync pytest",
+        "uv run --no-sync python -m compileall",
+        "uv build --offline",
         "check_release_artifacts.py",
         "docker compose -f compose.example.yml config",
         "caddy validate",
         "xray version",
-        "LC_RELEASE_REAL_SMOKE",
+        "litechecker-smoke-subscription --probe",
     ):
         assert command in body
     marker = "do-not-print-this-secret"
@@ -583,32 +711,18 @@ def test_release_verifier_is_tracked_closed_and_covers_release_boundary():
     assert marker not in rejected.stdout + rejected.stderr
 
 
-def test_release_verifier_refuses_false_pass_without_live_smoke_or_docker(
-    tmp_path,
-):
-    """Default release mode must fail before presenting an offline check as release PASS."""
+def test_release_verifier_live_mode_requires_docker(tmp_path):
+    """Live mode is an explicit gate and cannot silently degrade to offline checks."""
     verifier = ROOT / "scripts/verify-release.sh"
-    environment = {
-        key: value
-        for key, value in os.environ.items()
-        if key not in {"LC_RELEASE_REAL_SMOKE", "LC_RELEASE_MODE"}
-    }
-    missing_smoke = subprocess.run(
-        [str(verifier)], cwd=ROOT, env=environment, text=True, capture_output=True
-    )
-    assert missing_smoke.returncode != 0
-    assert "release-live-smoke-required" in missing_smoke.stderr
-
     stub = tmp_path / "bin"
     stub.mkdir()
     _write_stub(stub, "docker", "exit 1")
     no_docker = subprocess.run(
-        [str(verifier)],
+        [str(verifier), "live"],
         cwd=ROOT,
         env={
-            **environment,
-            "LC_RELEASE_REAL_SMOKE": "1",
-            "PATH": f"{stub}:{environment['PATH']}",
+            **os.environ,
+            "PATH": f"{stub}:{os.environ['PATH']}",
         },
         text=True,
         capture_output=True,
@@ -616,14 +730,96 @@ def test_release_verifier_refuses_false_pass_without_live_smoke_or_docker(
     assert no_docker.returncode != 0
     assert "release-docker-required" in no_docker.stderr
 
-    body = verifier.read_text(encoding="utf-8")
-    assert "development-offline" in body
-    assert "NON_RELEASE_DEVELOPMENT_VERIFICATION" in body
+
+def test_release_verifier_offline_mode_never_invokes_docker_or_live_smoke(tmp_path):
+    verifier = ROOT / "scripts/verify-release.sh"
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    marker = tmp_path / "external-calls"
+    _write_stub(
+        tools,
+        "git",
+        'if [ "$1" = status ]; then printf " M local-change\\n"; exit 0; fi; exit 99',
+    )
+    _write_stub(tools, "docker", 'printf "docker\\n" >> "$MARKER"; exit 99')
+    _write_stub(
+        tools,
+        "uv",
+        'printf "uv:%s\\n" "$*" >> "$MARKER"; exit 99',
+    )
+
+    result = subprocess.run(
+        [str(verifier), "offline"],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{tools}:/usr/bin:/bin",
+            "MARKER": str(marker),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "release-worktree-not-clean" in result.stderr
+    assert not marker.exists()
+
+
+def test_ci_is_hermetic_pinned_and_validates_public_package_on_linux_and_macos():
+    workflow = ROOT / ".github/workflows/ci.yml"
+    body = workflow.read_text(encoding="utf-8")
+
+    assert "push:" in body and "pull_request:" in body
+    assert "ubuntu-latest" in body and "macos-latest" in body
+    uses = re.findall(r"uses:\s+([^\s#]+)", body)
+    assert uses
+    assert all(re.fullmatch(r"[^@]+@[0-9a-f]{40}", value) for value in uses)
+    assert "scripts/package_agent.py" in body
+    assert "LiteChecker-agent.zip" in body
+    assert "validate_source_zip" in body
+    assert not re.search(r"\b(secrets|docker|sign|publish)\b", body, re.IGNORECASE)
+
+
+def test_ci_and_release_verifier_reuse_the_explicitly_synced_environment():
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    )
+    ci_steps = workflow["jobs"]["test-and-package"]["steps"]
+    sync_index = next(
+        index
+        for index, step in enumerate(ci_steps)
+        if str(step.get("run", "")).startswith("uv sync ")
+    )
+    run_steps = [
+        (index, str(step["run"]))
+        for index, step in enumerate(ci_steps)
+        if str(step.get("run", "")).lstrip().startswith("uv run ")
+    ]
+    assert run_steps
+    assert all(index > sync_index for index, _ in run_steps)
+    assert all(command.lstrip().startswith("uv run --no-sync ") for _, command in run_steps)
+
+    verifier_lines = (ROOT / "scripts/verify-release.sh").read_text(
+        encoding="utf-8"
+    ).splitlines()
+    verifier_sync_index = verifier_lines.index(
+        "uv sync --all-groups --all-extras --frozen"
+    )
+    verifier_runs = [
+        (index, line.strip())
+        for index, line in enumerate(verifier_lines)
+        if line.strip().startswith("uv run ")
+    ]
+    assert verifier_runs
+    assert all(index > verifier_sync_index for index, _ in verifier_runs)
+    assert all(command.startswith("uv run --no-sync ") for _, command in verifier_runs)
+    assert "uv build --offline" in verifier_lines
 
 
 def test_readme_documents_verified_image_transfer_and_online_backup_restore():
     """A clean second host and rollback need complete immutable, WAL-safe workflows."""
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    readme = OPERATIONS_GUIDE.read_text(encoding="utf-8")
     for text in (
         "docker image save",
         "docker image load",
@@ -703,8 +899,8 @@ def test_compose_secret_mounts_match_example_file_configuration():
             if line and not line.startswith("#")
         )
 
-    agent = dotenv(".env.agent.example")
-    collector = dotenv(".env.collector.example")
+    agent = dotenv("examples/.env.agent.example")
+    collector = dotenv("examples/.env.collector.example")
     agent_mounts = {volume.rsplit(":", 2)[-2] for volume in compose["services"]["tbilisi-agent"]["volumes"]}
     collector_mounts = {volume.rsplit(":", 2)[-2] for volume in compose["services"]["collector"]["volumes"]}
 
@@ -726,7 +922,7 @@ def test_compose_secret_mounts_match_example_file_configuration():
 
 def test_readme_bash_bootstrap_blocks_are_syntactically_valid():
     """Copy-paste setup blocks must at least parse as complete Bash programs."""
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    readme = OPERATIONS_GUIDE.read_text(encoding="utf-8")
     blocks = re.findall(r"```bash\n(.*?)\n```", readme, flags=re.DOTALL)
     assert len(blocks) >= 8
     for position, block in enumerate(blocks):

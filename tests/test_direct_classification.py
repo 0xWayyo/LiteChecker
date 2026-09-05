@@ -78,6 +78,67 @@ async def run_probes(settings, network, targets):
 
 
 @pytest.mark.asyncio
+async def test_scoped_factory_honors_configured_tcp_timeout(settings, monkeypatch):
+    """A real scoped probe must time out at the configured budget, not a fixed 3s."""
+    settings.agent.tcp_timeout_seconds = 1
+
+    class SlowConnect(Network):
+        async def connect(self, host, port):
+            await asyncio.sleep(1.2)
+            return await super().connect(host, port)
+
+    monkeypatch.setattr(direct_check, "XrayTunnel", FailedCanary)
+    result, = await run_probes(settings, SlowConnect(), [target("up")])
+    assert (result.status, result.stage, result.error_code) == (
+        ResultStatus.DOWN, ProbeStage.TCP, "tcp-timeout",
+    )
+
+
+@pytest.mark.asyncio
+async def test_scoped_factory_honors_configured_tls_budget(settings):
+    """SNI checks use the common probe budget, including an actual cancellation."""
+    settings.agent.probe_timeout_seconds = 1
+    closed = []
+
+    class SlowTlsWriter(Writer):
+        async def start_tls(self, *args, **kwargs):
+            await asyncio.sleep(1.2)
+
+        def close(self):
+            closed.append(True)
+
+    class SlowTls(Network):
+        async def connect(self, host, port):
+            return None, SlowTlsWriter()
+
+    result, = await run_probes(settings, SlowTls(), [target("sni", "edge.example", kind="sni")])
+    assert (result.status, result.stage, result.error_code) == (
+        ResultStatus.DOWN, ProbeStage.TLS_HANDSHAKE, "tls-timeout",
+    )
+    assert len(closed) == 2  # TCP diagnostic and cancelled TLS connection.
+
+
+@pytest.mark.asyncio
+async def test_scoped_tls_passes_custom_handshake_budget_and_server_name(settings):
+    settings.agent.probe_timeout_seconds = 7
+    handshakes = []
+
+    class TlsWriter(Writer):
+        async def start_tls(self, context, *, server_hostname, ssl_handshake_timeout):
+            handshakes.append((server_hostname, ssl_handshake_timeout))
+            assert context.check_hostname
+            assert context.verify_mode == ssl.CERT_REQUIRED
+
+    class TlsNetwork(Network):
+        async def connect(self, host, port):
+            return None, TlsWriter()
+
+    result, = await run_probes(settings, TlsNetwork(), [target("sni", "edge.example", kind="sni")])
+    assert result.status is ResultStatus.UP
+    assert handshakes == [("edge.example", 7)]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("code, status, stage, reason", [
     ("direct_dns_timeout", ResultStatus.UNKNOWN, ProbeStage.POLICY, "direct-dns:direct_dns_timeout"),
     ("direct_dns_failed", ResultStatus.UNKNOWN, ProbeStage.POLICY, "direct-dns:direct_dns_failed"),

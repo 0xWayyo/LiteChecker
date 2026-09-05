@@ -13,6 +13,7 @@ from collections.abc import Awaitable, Callable, Iterable
 import httpx
 from filelock import AsyncFileLock, Timeout as FileLockTimeout
 
+from litechecker.async_state import state_call
 from litechecker.collector.db import ClaimedNotification, CollectorDB
 from litechecker.telegram_proxy import validate_telegram_proxy_url
 
@@ -244,7 +245,7 @@ class NotificationDispatcher:
             try:
                 async with lock:
                     try:
-                        await asyncio.to_thread(self._db.reset_notification_leases)
+                        await state_call(self._db.reset_notification_leases)
                     except asyncio.CancelledError:
                         raise
                     except Exception:
@@ -256,7 +257,7 @@ class NotificationDispatcher:
     async def _drain_locked(self) -> None:
         while True:
             try:
-                claim = await asyncio.to_thread(
+                claim = await state_call(
                     self._db.claim_notification,
                     self._owner,
                     self._clock(),
@@ -305,7 +306,7 @@ class NotificationDispatcher:
                     continue
                 return
             try:
-                await asyncio.to_thread(
+                await state_call(
                     self._db.acknowledge_chunk, claim, self._owner, self._clock()
                 )
             except asyncio.CancelledError:
@@ -316,7 +317,7 @@ class NotificationDispatcher:
 
     async def _record_failure(self, claim: ClaimedNotification, error_code: str, *, permanent: bool) -> bool:
         try:
-            return await asyncio.to_thread(
+            return await state_call(
                 self._db.record_notification_failure,
                 claim,
                 self._owner,

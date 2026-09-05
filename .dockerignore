@@ -9,13 +9,9 @@
 !src/
 !src/litechecker/
 !src/litechecker/*.py
-!src/litechecker/collector/
-!src/litechecker/collector/*.py
+!src/litechecker/**/
+!src/litechecker/**/*.py
 
-# Tracked, placeholder-only operator examples are intentionally publishable.
-!.env.agent.example
-!.env.collector.example
-!agents.example.json
 !compose.example.yml
 !compose.agent.example.yml
 !deploy/

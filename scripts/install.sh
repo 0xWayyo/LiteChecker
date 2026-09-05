@@ -81,7 +81,7 @@ if [[ -f update-channel.json || -f .updates/channel.json ]]; then
         && bash scripts/update.sh schedule; then
         printf '%s\n' 'Проверка подписанных обновлений настроена.'
     else
-        printf '%s\n' 'Внимание: чекер запущен, но автообновления не настроены. См. UPDATES.md.' >&2
+        printf '%s\n' 'Внимание: чекер запущен, но автообновления не настроены. См. docs/operations/updates.md.' >&2
     fi
 fi
 printf '\n%s\n' 'Контейнер запущен в фоне. Дождитесь первого отчёта в Telegram; это окно можно закрыть.'

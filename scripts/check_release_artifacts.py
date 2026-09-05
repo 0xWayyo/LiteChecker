@@ -19,7 +19,7 @@ def _safe_member(name: str, *, wheel: bool) -> bool:
     if path.is_absolute() or ".." in path.parts or _FORBIDDEN.intersection(path.parts):
         return False
     lowered = name.lower()
-    if lowered.endswith(".diff") or "task-7-report" in lowered or ".env" in path.parts:
+    if lowered.endswith((".diff", ".report")) or ".env" in path.parts:
         return False
     if wheel:
         return path.parts[0] == "litechecker" or (

@@ -6,6 +6,8 @@ import asyncio
 import signal
 import subprocess
 import sys
+import textwrap
+from types import SimpleNamespace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -15,6 +17,55 @@ from litechecker.config import AgentSettings, CollectorSettings
 
 
 VALID_AGENT_TOKEN = "lc_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ"
+
+
+def test_common_cli_import_does_not_require_collector_web_dependencies():
+    script = textwrap.dedent(
+        """
+        import builtins
+        original_import = builtins.__import__
+
+        def guarded_import(name, *args, **kwargs):
+            if name.partition('.')[0] in {'fastapi', 'uvicorn'}:
+                raise ModuleNotFoundError(name=name)
+            return original_import(name, *args, **kwargs)
+
+        builtins.__import__ = guarded_import
+        from litechecker import cli
+        cli._parser()
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, check=False
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_collector_without_extra_reports_an_explicit_configuration_error():
+    script = textwrap.dedent(
+        """
+        import builtins
+        original_import = builtins.__import__
+
+        def guarded_import(name, *args, **kwargs):
+            if name.partition('.')[0] in {'fastapi', 'uvicorn'}:
+                raise ModuleNotFoundError(name=name)
+            return original_import(name, *args, **kwargs)
+
+        builtins.__import__ = guarded_import
+        from litechecker import cli
+        raise SystemExit(cli.main(['collector']))
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, check=False
+    )
+
+    assert result.returncode == 2
+    assert "collector-extra-required" in result.stderr
 
 
 def _agent_settings() -> AgentSettings:
@@ -196,7 +247,6 @@ def test_collector_uses_configured_bind_address(monkeypatch, tmp_path):
     observed: dict[str, object] = {}
 
     monkeypatch.setattr(cli.CollectorSettings, "from_env", lambda: settings)
-    monkeypatch.setattr(cli, "create_app", lambda actual: app if actual is settings else None)
 
     class FakeConfig:
         def __init__(self, actual_app, **kwargs):
@@ -212,8 +262,12 @@ def test_collector_uses_configured_bind_address(monkeypatch, tmp_path):
         async def serve(self):
             observed["served"] = True
 
-    monkeypatch.setattr(cli.uvicorn, "Config", FakeConfig)
-    monkeypatch.setattr(cli.uvicorn, "Server", FakeServer)
+    runtime = SimpleNamespace(Config=FakeConfig, Server=FakeServer)
+    monkeypatch.setattr(
+        cli,
+        "_load_collector_runtime",
+        lambda: (runtime, lambda actual: app if actual is settings else None),
+    )
 
     assert cli.main(["collector"]) == 0
     assert observed["app"] is app
@@ -321,8 +375,6 @@ def test_collector_nonzero_system_exit_becomes_sanitized_fatal_exit(
     monkeypatch.setattr(
         cli.CollectorSettings, "from_env", lambda: _collector_settings(tmp_path)
     )
-    monkeypatch.setattr(cli, "create_app", lambda settings: object())
-    monkeypatch.setattr(cli.uvicorn, "Config", lambda *args, **kwargs: object())
 
     class FailedServer:
         started = False
@@ -333,7 +385,12 @@ def test_collector_nonzero_system_exit_becomes_sanitized_fatal_exit(
         async def serve(self):
             raise SystemExit(3)
 
-    monkeypatch.setattr(cli.uvicorn, "Server", FailedServer)
+    runtime = SimpleNamespace(
+        Config=lambda *args, **kwargs: object(), Server=FailedServer
+    )
+    monkeypatch.setattr(
+        cli, "_load_collector_runtime", lambda: (runtime, lambda settings: object())
+    )
 
     assert cli.main(["collector"]) == 1
     stderr = capsys.readouterr().err
@@ -350,8 +407,6 @@ def test_collector_lifespan_failure_without_system_exit_is_fatal(
     monkeypatch.setattr(
         cli.CollectorSettings, "from_env", lambda: _collector_settings(tmp_path)
     )
-    monkeypatch.setattr(cli, "create_app", lambda settings: object())
-    monkeypatch.setattr(cli.uvicorn, "Config", lambda *args, **kwargs: object())
 
     class FailedLifespanServer:
         started = False
@@ -362,7 +417,12 @@ def test_collector_lifespan_failure_without_system_exit_is_fatal(
         async def serve(self):
             return None
 
-    monkeypatch.setattr(cli.uvicorn, "Server", FailedLifespanServer)
+    runtime = SimpleNamespace(
+        Config=lambda *args, **kwargs: object(), Server=FailedLifespanServer
+    )
+    monkeypatch.setattr(
+        cli, "_load_collector_runtime", lambda: (runtime, lambda settings: object())
+    )
 
     assert cli.main(["collector"]) == 1
     assert "fatal-runtime-error" in capsys.readouterr().err
@@ -375,8 +435,6 @@ def test_collector_zero_system_exit_is_clean(monkeypatch, tmp_path):
     monkeypatch.setattr(
         cli.CollectorSettings, "from_env", lambda: _collector_settings(tmp_path)
     )
-    monkeypatch.setattr(cli, "create_app", lambda settings: object())
-    monkeypatch.setattr(cli.uvicorn, "Config", lambda *args, **kwargs: object())
 
     class CleanServer:
         started = False
@@ -387,6 +445,11 @@ def test_collector_zero_system_exit_is_clean(monkeypatch, tmp_path):
         async def serve(self):
             raise SystemExit(0)
 
-    monkeypatch.setattr(cli.uvicorn, "Server", CleanServer)
+    runtime = SimpleNamespace(
+        Config=lambda *args, **kwargs: object(), Server=CleanServer
+    )
+    monkeypatch.setattr(
+        cli, "_load_collector_runtime", lambda: (runtime, lambda settings: object())
+    )
 
     assert cli.main(["collector"]) == 0

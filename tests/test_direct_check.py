@@ -82,6 +82,35 @@ def test_scoped_pipeline_uses_variant_aware_subscription_parser(tmp_path):
     assert dependencies.parser is parse_trial_subscription
 
 
+def test_scoped_pipeline_never_constructs_collector_delivery(tmp_path, monkeypatch):
+    from litechecker import agent
+    from litechecker.config import AgentSettings, StandaloneSettings
+    from litechecker.direct_check import scoped_dependencies
+
+    def forbidden_collector(*args, **kwargs):
+        pytest.fail("DIRECT measurement must not construct collector delivery")
+
+    monkeypatch.setattr(agent, "CollectorClient", forbidden_collector)
+    settings = StandaloneSettings(
+        agent=AgentSettings(
+            agent_id="test", agent_token="lc_AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA",
+            collector_url="https://collector.example.com", subscription_url="https://example.com/s",
+            state_key="k" * 32,
+        ),
+        identity=AgentIdentity("test", "City", "PC", 600), state_dir=tmp_path,
+        telegram_bot_token="123456789:abcdefghijklmnopqrstuvwxyz12345", telegram_chat_id="-1234",
+    )
+
+    class Relay:
+        proxy_url = "socks5://user:password@127.0.0.1:10001"
+
+    dependencies = scoped_dependencies(settings, object(), Relay())
+    for delivery_field in ("pending_store", "ack_store", "sender"):
+        assert not hasattr(dependencies, delivery_field)
+    assert not (tmp_path / "pending-report.json").exists()
+    assert not (tmp_path / "collector-ack.json").exists()
+
+
 def uncertain_fixture():
     return [report().results[0].model_copy(update={
         "status": ResultStatus.UNKNOWN, "stage": ProbeStage.POLICY,

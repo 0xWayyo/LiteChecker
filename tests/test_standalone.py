@@ -409,7 +409,7 @@ async def test_default_pipeline_uses_configured_state_directory(tmp_path, monkey
         return dependencies
 
     monkeypatch.setenv("LC_STATE_DIR", str(tmp_path / "wrong-state"))
-    monkeypatch.setattr(standalone, "_default_dependencies", factory)
+    monkeypatch.setattr(standalone, "make_measurement_dependencies", factory)
     report = await standalone.run_standalone(
         settings, once=True, telegram=_telegram(lambda request: _accepted())
     )

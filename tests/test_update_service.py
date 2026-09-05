@@ -80,6 +80,39 @@ def test_disabled_check_reaches_core_to_recover_pending_transaction(tmp_path, mo
     assert "rolled-back" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize(
+    ("status", "exit_code"),
+    [("updated", 0), ("current", 0), ("rolled-back", 1)],
+)
+def test_platform_cleanup_failure_keeps_completed_check_result_closed(
+    tmp_path, monkeypatch, capsys, status, exit_code
+):
+    from litechecker import update_service, updater
+
+    updates = tmp_path / ".updates"
+    updates.mkdir()
+    (updates / "channel.json").write_text("{}")
+    monkeypatch.setattr(updater, "update_status", lambda _: {"status": "enabled"})
+    monkeypatch.setattr(update_service, "platform_adapter", lambda _: object())
+
+    async def completed(root, adapter, *, force=False):
+        return {"status": status, "error": None}
+
+    async def fail_cleanup(root):
+        raise RuntimeError("docker stderr with https://secret.invalid/token")
+
+    monkeypatch.setattr(updater, "check_for_update", completed)
+    monkeypatch.setattr(update_service, "cleanup_platform_images", fail_cleanup)
+
+    assert update_service.main(["check", "--root", str(tmp_path)]) == exit_code
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+    assert result["status"] == status
+    assert result["warning"] == "platform-cleanup-failed"
+    assert "secret" not in captured.out
+    assert captured.err == ""
+
+
 def test_stop_launcher_uses_baseline_even_when_active_state_is_corrupt(tmp_path, monkeypatch):
     from litechecker import update_launcher
     runtime = tmp_path / ".native-direct/venv/bin/python"

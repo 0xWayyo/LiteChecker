@@ -17,7 +17,7 @@ from pathlib import Path
 import httpx
 from filelock import AsyncFileLock
 
-from litechecker.agent import SubscriptionFetcher, _default_dependencies, run_cycle
+from litechecker.measurement import SubscriptionFetcher, make_measurement_dependencies, measure_cycle
 from litechecker.collector.reporting import _result_line, chunk_message
 from litechecker.collector.telegram import TelegramClient
 from litechecker.config import StandaloneSettings
@@ -209,8 +209,9 @@ def _direct_error_code(exc):
 
 
 class _ScopedDiagnostics:
-    def __init__(self, network):
+    def __init__(self, network, *, tcp_timeout: float):
         self.network = network
+        self.tcp_timeout = tcp_timeout
         self.faults: dict[str, str] = {}
 
     def record_failure(self, target, phase, exc):
@@ -239,7 +240,7 @@ class _ScopedDiagnostics:
         writer = None
         started = time.monotonic()
         try:
-            async with asyncio.timeout(3):
+            async with asyncio.timeout(self.tcp_timeout):
                 _, writer = await self.network.connect(addresses[0], target.port)
                 return DiagnosticResult(ok=True, latency_ms=int((time.monotonic() - started) * 1000))
         except Exception as exc:
@@ -250,8 +251,9 @@ class _ScopedDiagnostics:
 
 
 class _ScopedTls:
-    def __init__(self, diagnostics):
+    def __init__(self, diagnostics, *, timeout: float):
         self.diagnostics = diagnostics
+        self.timeout = timeout
         self.context = ssl.create_default_context()
 
     async def check(self, target, address):
@@ -259,11 +261,11 @@ class _ScopedTls:
         started = time.monotonic()
         connected = False
         try:
-            async with asyncio.timeout(5):
+            async with asyncio.timeout(self.timeout):
                 _, writer = await self.diagnostics.network.connect(address, target.port)
                 connected = True
                 await writer.start_tls(self.context, server_hostname=target.address,
-                                       ssl_handshake_timeout=4)
+                                       ssl_handshake_timeout=self.timeout)
                 return DiagnosticResult(ok=True, latency_ms=int((time.monotonic() - started) * 1000))
         except ssl.SSLCertVerificationError:
             return DiagnosticResult(ok=False, error_code="tls-certificate")
@@ -318,18 +320,9 @@ class _ScopedTunnel:
             ).check(target)
 
 
-class _CapturedSender:
-    async def send(self, report):
-        # run_cycle manages its snapshot/outbox normally, but this experimental
-        # one-shot renders and optionally sends only the current final report.
-        pass
-
-
 def scoped_dependencies(settings, network, relay):
-    dependencies = _default_dependencies(settings.agent, state_dir=settings.state_dir)
+    dependencies = make_measurement_dependencies(settings.agent, state_dir=settings.state_dir)
     dependencies.parser = parse_trial_subscription
-    dependencies.sender = _CapturedSender()
-    dependencies.ack_store = None
     dependencies.fetcher = SubscriptionFetcher(
         settings.agent.subscription_url.get_secret_value(),
         max_bytes=settings.agent.max_subscription_bytes,
@@ -344,11 +337,12 @@ def scoped_dependencies(settings, network, relay):
             return await check_control(requester=request)
 
     async def prober(targets, control, deadline):
-        diagnostics = _ScopedDiagnostics(network)
+        diagnostics = _ScopedDiagnostics(network, tcp_timeout=settings.agent.tcp_timeout_seconds)
         results = await probe_all(
             targets, control=control, deadline_seconds=deadline,
             max_concurrency=settings.agent.max_concurrency,
-            resolver=diagnostics, tcp=diagnostics, tls=_ScopedTls(diagnostics),
+            resolver=diagnostics, tcp=diagnostics,
+            tls=_ScopedTls(diagnostics, timeout=settings.agent.probe_timeout_seconds),
             tunnel=_ScopedTunnel(diagnostics, settings.agent),
         )
         return uncertain_results(results, diagnostics.faults)
@@ -415,7 +409,7 @@ async def run_trial(settings, *, send=False, telegram=None, production=False):
             await deliver(text)
             return TrialResult(text, False)
         dependencies = scoped_dependencies(settings, network, relay)
-        report = await run_cycle(settings.agent, dependencies)
+        report = await measure_cycle(settings.agent, dependencies)
         save_last_observation(settings.state_dir, report, interface=network.interface,
                               scoped_exit=scoped_exit, ordinary_exit=ordinary_exit)
         if production:

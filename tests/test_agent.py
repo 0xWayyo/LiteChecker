@@ -924,6 +924,7 @@ async def test_newer_sender_waits_while_older_holds_delivery_lock(tmp_path):
     first_send_started = asyncio.Event()
     release_first_send = asyncio.Event()
     newer_saved = asyncio.Event()
+    loop = asyncio.get_running_loop()
     order: list[tuple[str, int]] = []
 
     class BlockingSender:
@@ -940,7 +941,7 @@ async def test_newer_sender_waits_while_older_holds_delivery_lock(tmp_path):
         def save(self, report):
             outcome = super().save(report)
             if report["sequence"] == 1:
-                newer_saved.set()
+                loop.call_soon_threadsafe(newer_saved.set)
             return outcome
 
     old_dependencies = _dependencies(

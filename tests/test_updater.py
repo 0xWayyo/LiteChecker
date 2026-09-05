@@ -495,6 +495,206 @@ async def test_current_check_cleans_abandoned_owned_temp_but_preserves_unknown(t
 
 
 @pytest.mark.asyncio
+async def test_updated_cleanup_failure_preserves_commit_and_retries_on_current_check(tmp_path, monkeypatch):
+    updater = _module()
+    private = Ed25519PrivateKey.generate()
+    public = private.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    metadata, archive = _release(private)
+    _configure(tmp_path, public)
+    adapter = Adapter(tmp_path, running=False)
+    mapping = {
+        "https://updates.example/release.json": metadata,
+        "https://downloads.example/LiteChecker-0.2.0.zip": archive,
+    }
+    original_cleanup = updater.UpdateStore.cleanup
+    cleanup_calls = 0
+
+    def fail_once(self, **kwargs):
+        nonlocal cleanup_calls
+        cleanup_calls += 1
+        if cleanup_calls == 1:
+            raise OSError("fixture cleanup path /secret must stay closed")
+        return original_cleanup(self, **kwargs)
+
+    monkeypatch.setattr(updater.UpdateStore, "cleanup", fail_once)
+
+    updated = await updater.check_for_update(
+        tmp_path, adapter, force=True, fetcher=_fetcher(mapping)
+    )
+    committed = json.loads((tmp_path / ".updates/install.json").read_text())
+    current = await updater.check_for_update(
+        tmp_path, adapter, force=True, fetcher=_fetcher(mapping)
+    )
+
+    assert updated["status"] == "updated"
+    assert updated["warning"] == "update-cleanup-failed"
+    assert committed["status"] == "updated"
+    assert committed["active"] == "0.2.0"
+    assert committed["pending"] is None
+    assert adapter.running is False
+    assert current["status"] == "current"
+    assert "warning" not in current
+    assert cleanup_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_current_cleanup_failure_preserves_current_state(tmp_path, monkeypatch):
+    updater = _module()
+    private = Ed25519PrivateKey.generate()
+    public = private.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    metadata, archive = _release(private)
+    _configure(tmp_path, public)
+    adapter = Adapter(tmp_path)
+    mapping = {
+        "https://updates.example/release.json": metadata,
+        "https://downloads.example/LiteChecker-0.2.0.zip": archive,
+    }
+    assert (await updater.check_for_update(
+        tmp_path, adapter, force=True, fetcher=_fetcher(mapping)
+    ))["status"] == "updated"
+
+    def fail_cleanup(self, **kwargs):
+        raise RuntimeError("fixture cleanup command docker image rm secret")
+
+    monkeypatch.setattr(updater.UpdateStore, "cleanup", fail_cleanup)
+    result = await updater.check_for_update(
+        tmp_path, adapter, force=True, fetcher=_fetcher(mapping)
+    )
+    persisted = json.loads((tmp_path / ".updates/install.json").read_text())
+
+    assert result["status"] == "current"
+    assert result["warning"] == "update-cleanup-failed"
+    assert "secret" not in json.dumps(result)
+    assert persisted["status"] == "current"
+    assert persisted["active"] == "0.2.0"
+
+
+@pytest.mark.asyncio
+async def test_rolled_back_cleanup_failure_preserves_journal_resolution_and_pause(tmp_path, monkeypatch):
+    updater = _module()
+    private = Ed25519PrivateKey.generate()
+    public = private.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    _configure(tmp_path, public)
+    adapter = Adapter(tmp_path, running=False)
+    first_metadata, first_archive = _release(private, "0.2.0", 2)
+    assert (await updater.check_for_update(
+        tmp_path,
+        adapter,
+        force=True,
+        fetcher=_fetcher({
+            "https://updates.example/release.json": first_metadata,
+            "https://downloads.example/LiteChecker-0.2.0.zip": first_archive,
+        }),
+    ))["status"] == "updated"
+    adapter.fail_health_for.add("0.3.0")
+    second_metadata, second_archive = _release(private, "0.3.0", 3)
+
+    def fail_cleanup(self, **kwargs):
+        raise OSError("fixture cleanup failed for /private/data")
+
+    monkeypatch.setattr(updater.UpdateStore, "cleanup", fail_cleanup)
+    result = await updater.check_for_update(
+        tmp_path,
+        adapter,
+        force=True,
+        fetcher=_fetcher({
+            "https://updates.example/release.json": second_metadata,
+            "https://downloads.example/LiteChecker-0.3.0.zip": second_archive,
+        }),
+    )
+    persisted = json.loads((tmp_path / ".updates/install.json").read_text())
+
+    assert result["status"] == "rolled-back"
+    assert result["warning"] == "update-cleanup-failed"
+    assert result["version"] == "0.2.0"
+    assert persisted["status"] == "rolled-back"
+    assert persisted["pending"] is None
+    assert persisted["failed"]["sequence"] == 3
+    assert adapter.running is False
+
+
+@pytest.mark.asyncio
+async def test_rolled_back_candidate_removal_failure_preserves_committed_outcome(tmp_path, monkeypatch):
+    updater = _module()
+    private = Ed25519PrivateKey.generate()
+    public = private.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    _configure(tmp_path, public)
+    adapter = Adapter(tmp_path, running=False)
+    first_metadata, first_archive = _release(private, "0.2.0", 2)
+    assert (await updater.check_for_update(
+        tmp_path,
+        adapter,
+        force=True,
+        fetcher=_fetcher({
+            "https://updates.example/release.json": first_metadata,
+            "https://downloads.example/LiteChecker-0.2.0.zip": first_archive,
+        }),
+    ))["status"] == "updated"
+    adapter.fail_health_for.add("0.3.0")
+    second_metadata, second_archive = _release(private, "0.3.0", 3)
+
+    def fail_removal(self, version):
+        raise OSError("fixture candidate /secret cannot be removed")
+
+    monkeypatch.setattr(updater.UpdateStore, "remove_release", fail_removal)
+    result = await updater.check_for_update(
+        tmp_path,
+        adapter,
+        force=True,
+        fetcher=_fetcher({
+            "https://updates.example/release.json": second_metadata,
+            "https://downloads.example/LiteChecker-0.3.0.zip": second_archive,
+        }),
+    )
+    persisted = json.loads((tmp_path / ".updates/install.json").read_text())
+
+    assert result["status"] == "rolled-back"
+    assert result["warning"] == "update-cleanup-failed"
+    assert persisted["status"] == "rolled-back"
+    assert persisted["pending"] is None
+    assert adapter.running is False
+
+
+@pytest.mark.asyncio
+async def test_recovery_candidate_removal_failure_preserves_resolved_journal(tmp_path, monkeypatch):
+    updater = _module()
+    store_module = importlib.import_module("litechecker.update_store")
+    private = Ed25519PrivateKey.generate()
+    public = private.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    _configure(tmp_path, public)
+    adapter = Adapter(tmp_path, running=False)
+    candidate_archive = _archive("0.2.0")
+    store = store_module.UpdateStore(tmp_path)
+    candidate = store.stage("0.2.0", store_module.validate_source_zip(candidate_archive))
+    state = store_module.default_install_state()
+    state["pending"] = {
+        "from_version": None,
+        "to_version": "0.2.0",
+        "sequence": 2,
+        "digest": hashlib.sha256(candidate_archive).hexdigest(),
+        "was_running": False,
+    }
+    state["status"] = "failed"
+    store.write_install(state)
+    adapter.activated = candidate
+
+    def fail_removal(self, version):
+        raise OSError("fixture candidate /secret cannot be removed")
+
+    monkeypatch.setattr(updater.UpdateStore, "remove_release", fail_removal)
+    result = await updater.check_for_update(
+        tmp_path, adapter, force=True, fetcher=_fetcher({})
+    )
+    persisted = json.loads((tmp_path / ".updates/install.json").read_text())
+
+    assert result["status"] == "rolled-back"
+    assert result["warning"] == "update-cleanup-failed"
+    assert persisted["status"] == "rolled-back"
+    assert persisted["pending"] is None
+    assert adapter.running is False
+
+
+@pytest.mark.asyncio
 async def test_cancellation_during_prepare_removes_unjournaled_candidate(tmp_path):
     updater = _module()
     private = Ed25519PrivateKey.generate()

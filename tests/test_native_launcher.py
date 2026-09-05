@@ -6,6 +6,7 @@ import os
 import hashlib
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -134,6 +135,9 @@ def install_fixture(tmp_path):
                  "scripts/install-macos.sh", "scripts/native-direct.sh"):
         shutil.copy2(SOURCE / name, source / name)
     shutil.copytree(SOURCE / "src", source / "src")
+    nested = source / "src/litechecker/diagnostics/platform/macos.py"
+    nested.parent.mkdir(parents=True)
+    nested.write_text("NESTED_RUNTIME = True\n")
     (source / ".env.standalone").write_text(
         "LC_AGENT_NAME='Source Mac'\nLC_TELEGRAM_CHAT_ID='-77'\nLC_INTERVAL_SECONDS='12'\n"
     )
@@ -254,6 +258,9 @@ def test_native_installer_prepares_before_launch_and_stops_only_exact_legacy(tmp
     assert json.loads((root / "state/native-direct/device.json").read_text())["agent_id"] == "device-" + "4" * 32
     assert not (root / ".env.standalone").exists()
     assert not (root / "state/standalone").exists()
+    assert (
+        root / "src/litechecker/diagnostics/platform/macos.py"
+    ).read_text() == "NESTED_RUNTIME = True\n"
 
 
 def test_native_installer_rejects_payload_not_matching_manifest_before_bootstrap(tmp_path):
@@ -268,6 +275,30 @@ def test_native_installer_rejects_payload_not_matching_manifest_before_bootstrap
     assert not any(call.startswith("uv:") for call in calls)
     assert not any(call.startswith("docker:stop") for call in calls)
     assert not any("launchctl:bootstrap" in call for call in calls)
+
+
+def test_native_installer_missing_manifest_points_to_attached_client_archive(tmp_path):
+    source, _, env, command_log = install_fixture(tmp_path)
+    (source / "CONTENTS.sha256.json").unlink()
+
+    result = subprocess.run(
+        [BASH, source / "scripts/install-macos.sh", source],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+    assert result.returncode != 0
+    assert re.findall(r"https://[^\s]+", result.stderr) == [
+        "https://github.com/0xWayyo/LiteChecker/releases/latest"
+    ]
+    assert "клиентский ZIP" in result.stderr
+    assert "Source code" in result.stderr
+    assert "package_agent.py" not in result.stderr
+    assert "PYTHONPATH" not in result.stderr
+    assert "uv run" not in result.stderr
+    assert not command_log.exists()
 
 
 def test_native_installer_rolls_back_exact_legacy_if_launchd_start_fails(tmp_path):
@@ -290,7 +321,10 @@ def test_native_installer_rolls_back_exact_legacy_if_launchd_start_fails(tmp_pat
     assert "установлен и запущен" not in result.stdout.lower()
 
 
-@pytest.mark.parametrize("linked", ["scripts", "src", "src/litechecker/collector"])
+@pytest.mark.parametrize(
+    "linked",
+    ["scripts", "src", "src/litechecker/collector", "src/litechecker/diagnostics"],
+)
 def test_native_installer_rejects_linked_payload_directory_before_mutation(tmp_path, linked):
     source, root, env, command_log = install_fixture(tmp_path)
     outside = tmp_path / "outside"

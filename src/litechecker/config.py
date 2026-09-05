@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, m
 from filelock import FileLock
 
 from litechecker.collector.auth import AgentIdentity
-from litechecker.security import generate_agent_token, is_valid_agent_id, is_valid_agent_token
+from litechecker.security import is_valid_agent_id, is_valid_agent_token
 from litechecker.state import _atomic_write_json
 
 
@@ -95,12 +95,10 @@ def _is_loopback_host(host: str | None) -> bool:
         return False
 
 
-class AgentSettings(BaseModel):
+class ProbeSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     agent_id: str = Field(min_length=1, max_length=128)
-    agent_token: SecretStr = Field(min_length=1)
-    collector_url: str
     subscription_url: SecretStr = Field(min_length=1)
     state_key: SecretStr = Field(min_length=32)
     interval_seconds: int = Field(default=600, ge=1)
@@ -111,7 +109,6 @@ class AgentSettings(BaseModel):
     max_subscription_bytes: int = Field(default=5_242_880, ge=1)
     max_endpoints: int = Field(default=2_000, ge=1)
     allow_private_targets: bool = False
-    allow_insecure_collector: bool = False
     xray_binary: str = Field(default="xray", min_length=1, max_length=4096)
     expected_xray_version: str = Field(
         default="26.3.27", pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$"
@@ -123,6 +120,43 @@ class AgentSettings(BaseModel):
         if not is_valid_agent_id(value):
             raise ValueError("agent_id is invalid")
         return value
+
+    @field_validator("subscription_url")
+    @classmethod
+    def _subscription_url_is_https(cls, value: SecretStr) -> SecretStr:
+        parsed = urlsplit(value.get_secret_value())
+        if parsed.scheme != "https" or not parsed.hostname:
+            raise ValueError("subscription_url must be an absolute HTTPS URL")
+        return value
+
+    @classmethod
+    def from_env(cls, environment: Mapping[str, str] | None = None) -> "ProbeSettings":
+        env = os.environ if environment is None else environment
+        return cls(
+            agent_id=env.get("LC_AGENT_ID"),
+            subscription_url=_value_from_env("LC_SUBSCRIPTION_URL", env),
+            state_key=_value_from_env("LC_STATE_KEY", env),
+            interval_seconds=env.get("LC_INTERVAL_SECONDS", 600),
+            run_deadline_seconds=env.get("LC_RUN_DEADLINE_SECONDS", 480),
+            probe_timeout_seconds=env.get("LC_PROBE_TIMEOUT_SECONDS", 12),
+            tcp_timeout_seconds=env.get("LC_TCP_TIMEOUT_SECONDS", 3),
+            max_concurrency=env.get("LC_MAX_CONCURRENCY", 4),
+            max_subscription_bytes=env.get("LC_MAX_SUBSCRIPTION_BYTES", 5_242_880),
+            max_endpoints=env.get("LC_MAX_ENDPOINTS", 2_000),
+            allow_private_targets=env.get("LC_ALLOW_PRIVATE_TARGETS", False),
+            xray_binary=env.get("LC_XRAY_BINARY", "xray"),
+            expected_xray_version=env.get(
+                "LC_EXPECTED_XRAY_VERSION", "26.3.27"
+            ),
+        )
+
+
+class AgentSettings(ProbeSettings):
+    """Measurement settings plus authenticated collector delivery."""
+
+    agent_token: SecretStr = Field(min_length=1)
+    collector_url: str
+    allow_insecure_collector: bool = False
 
     @field_validator("agent_token")
     @classmethod
@@ -146,14 +180,6 @@ class AgentSettings(BaseModel):
             raise ValueError("collector_url must be an absolute HTTP(S) URL")
         return value.rstrip("/")
 
-    @field_validator("subscription_url")
-    @classmethod
-    def _subscription_url_is_https(cls, value: SecretStr) -> SecretStr:
-        parsed = urlsplit(value.get_secret_value())
-        if parsed.scheme != "https" or not parsed.hostname:
-            raise ValueError("subscription_url must be an absolute HTTPS URL")
-        return value
-
     @model_validator(mode="after")
     def _collector_transport_is_safe(self) -> "AgentSettings":
         parsed = urlsplit(self.collector_url)
@@ -167,24 +193,10 @@ class AgentSettings(BaseModel):
     def from_env(cls, environment: Mapping[str, str] | None = None) -> "AgentSettings":
         env = os.environ if environment is None else environment
         return cls(
-            agent_id=env.get("LC_AGENT_ID"),
+            **ProbeSettings.from_env(env).model_dump(),
             agent_token=_value_from_env("LC_AGENT_TOKEN", env),
             collector_url=env.get("LC_COLLECTOR_URL"),
-            subscription_url=_value_from_env("LC_SUBSCRIPTION_URL", env),
-            state_key=_value_from_env("LC_STATE_KEY", env),
-            interval_seconds=env.get("LC_INTERVAL_SECONDS", 600),
-            run_deadline_seconds=env.get("LC_RUN_DEADLINE_SECONDS", 480),
-            probe_timeout_seconds=env.get("LC_PROBE_TIMEOUT_SECONDS", 12),
-            tcp_timeout_seconds=env.get("LC_TCP_TIMEOUT_SECONDS", 3),
-            max_concurrency=env.get("LC_MAX_CONCURRENCY", 4),
-            max_subscription_bytes=env.get("LC_MAX_SUBSCRIPTION_BYTES", 5_242_880),
-            max_endpoints=env.get("LC_MAX_ENDPOINTS", 2_000),
-            allow_private_targets=env.get("LC_ALLOW_PRIVATE_TARGETS", False),
             allow_insecure_collector=env.get("LC_ALLOW_INSECURE_COLLECTOR", False),
-            xray_binary=env.get("LC_XRAY_BINARY", "xray"),
-            expected_xray_version=env.get(
-                "LC_EXPECTED_XRAY_VERSION", "26.3.27"
-            ),
         )
 
 
@@ -200,7 +212,7 @@ class StandaloneSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
-    agent: AgentSettings
+    agent: ProbeSettings
     identity: AgentIdentity
     state_dir: Path
     telegram_bot_token: SecretStr = Field(min_length=1)
@@ -225,18 +237,12 @@ class StandaloneSettings(BaseModel):
         state_dir = Path(env.get("LC_STATE_DIR", "/var/lib/litechecker"))
         device_id, state_key = _device_identity(state_dir, env.get("LC_AGENT_ID"))
         name = _device_label(manual_name) if manual_name else _automatic_device_name(env, device_id)
-        # These credentials are only compatibility inputs to the shared probe
-        # settings. Standalone injects a local sender and never contacts a collector.
-        env.pop("LC_AGENT_TOKEN_FILE", None)
         env.pop("LC_STATE_KEY_FILE", None)
         env.update(
             LC_AGENT_ID=device_id,
-            LC_AGENT_TOKEN=generate_agent_token(),
-            LC_COLLECTOR_URL="http://127.0.0.1",
-            LC_ALLOW_INSECURE_COLLECTOR="true",
             LC_STATE_KEY=state_key,
         )
-        agent = AgentSettings.from_env(env)
+        agent = ProbeSettings.from_env(env)
         return cls(
             agent=agent,
             identity=AgentIdentity(device_id, city, name, agent.interval_seconds),

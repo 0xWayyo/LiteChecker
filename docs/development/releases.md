@@ -30,6 +30,11 @@ mkdir -m 700 ../litechecker-release-keys
 
 ## Подготовка релиза
 
+Сначала выполните полностью локальную проверку `scripts/verify-release.sh offline`.
+Она не обращается к Docker и не запускает реальные probes. Отдельный
+`scripts/verify-release.sh live` — явная финальная проверка с Docker и настоящим
+smoke-запросом; запускайте её только в разрешённом окружении перед публикацией.
+
 Ниже `OWNER/REPO` — заполнитель: укажите существующий выбранный репозиторий.
 Релиз должен быть доступен клиентам по HTTPS без GitHub PAT. У клиентов нет
 учётных данных автора и доступа к приватному ключу.
@@ -60,11 +65,11 @@ mkdir -m 700 ../litechecker-release-keys
 .venv/bin/python scripts/package_agent.py
 .venv/bin/python scripts/release.py build \
   --archive dist/LiteChecker-agent.zip \
-  --version 0.2.0 \
-  --sequence 2 \
+  --version 0.3.0 \
+  --sequence 3 \
   --repository OWNER/REPO \
   --private-key ../litechecker-release-keys/signing-private.key \
-  --output dist/releases/0.2.0
+  --output dist/releases/0.3.0
 ```
 
 Порядок первой подготовки: `keygen` → `channel` → упаковка → `build`.
@@ -81,7 +86,7 @@ mkdir -m 700 ../litechecker-release-keys
 
 | Файл | Назначение |
 | --- | --- |
-| `LiteChecker-0.2.0.zip` | Неизменённые байты проверенного публичного архива |
+| `LiteChecker-0.3.0.zip` | Неизменённые байты проверенного публичного архива |
 | `release.json` | Версия, sequence, время UTC, HTTPS-адрес ZIP, размер, SHA-256 и подпись Ed25519 |
 | `update-channel.json` | Публичный ключ и постоянный адрес подписанных метаданных для первой установки |
 
@@ -92,12 +97,12 @@ mkdir -m 700 ../litechecker-release-keys
 
 ## Публикация и первое устройство
 
-В GitHub создайте черновик Release с тегом `v0.2.0`, соответствующим проверенным
-исходникам. Загрузите три файла из `dist/releases/0.2.0`, проверьте имена и затем
+В GitHub создайте черновик Release с тегом `v0.3.0`, соответствующим проверенным
+исходникам. Загрузите три файла из `dist/releases/0.3.0`, проверьте имена и затем
 опубликуйте релиз как latest. ZIP будет находиться по адресу:
 
 ```text
-https://github.com/OWNER/REPO/releases/download/v0.2.0/LiteChecker-0.2.0.zip
+https://github.com/OWNER/REPO/releases/download/v0.3.0/LiteChecker-0.3.0.zip
 ```
 
 Постоянный адрес метаданных:
@@ -114,8 +119,9 @@ https://github.com/OWNER/REPO/releases/latest/download/release.json
 
 Приватные параметры первой установки — Telegram, подписка и необязательный
 Telegram-прокси — передаются в приватном установочном архиве. Архивы
-`LiteChecker-READY-PRIVATE.zip` и `LiteChecker-DIRECT-TRIAL-PRIVATE.zip` никогда
-не загружаются в GitHub Releases. Обновления не переносят секреты и не заменяют
+`LiteChecker-READY-PRIVATE.zip` никогда не загружается в GitHub Releases. Команда
+`TRY-DIRECT.command` уже входит в этот единый PRIVATE-архив. Обновления не
+переносят секреты и не заменяют
 конфигурацию, идентификатор устройства или накопленные отчёты.
 
 На первом устройстве проверьте статус настройки канала, установку следующей

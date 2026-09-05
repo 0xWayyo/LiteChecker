@@ -587,10 +587,11 @@ async def test_expired_lease_refuses_ack_and_stops_before_any_later_chunk(tmp_pa
 
 @pytest.mark.asyncio
 async def test_worst_retry_path_is_cancelled_before_lease_and_competitor_sends_alone(tmp_path):
-    """Two long retry-after waits remain under the dispatcher-wide monotonic deadline."""
+    """The second retry is cancelled by the dispatcher, before the lease expires."""
     db = CollectorDB(tmp_path / "collector.db", [AGENT])
     db.accept_report(_report(1), AGENT, received_at=NOW)
     entered_sleeps: list[float] = []
+    cancelled_retry = asyncio.Event()
 
     class RateLimited(httpx.AsyncBaseTransport):
         calls = 0
@@ -605,7 +606,16 @@ async def test_worst_retry_path_is_cancelled_before_lease_and_competitor_sends_a
 
     async def slow_retry_after(delay: float) -> None:
         entered_sleeps.append(delay)
-        await asyncio.sleep(0.1)
+        if len(entered_sleeps) == 1:
+            await asyncio.sleep(0)
+            return
+        try:
+            # Synchronize on retry count, not a race between 100ms sleeps and
+            # a 150ms total budget (which includes client initialization).
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled_retry.set()
+            raise
 
     transport = RateLimited()
     client = TelegramClient(
@@ -620,8 +630,8 @@ async def test_worst_retry_path_is_cancelled_before_lease_and_competitor_sends_a
             db,
             client,
             clock=lambda: NOW,
-            lease_seconds=1,
-            send_timeout_seconds=0.15,
+            lease_seconds=3,
+            send_timeout_seconds=1,
             lease_margin_seconds=0.1,
         ).drain()
     )
@@ -629,6 +639,7 @@ async def test_worst_retry_path_is_cancelled_before_lease_and_competitor_sends_a
 
     assert entered_sleeps == [60.0, 60.0]
     assert transport.calls == 2
+    assert cancelled_retry.is_set()
     assert task.done()
     replacement = db.claim_notification(
         "replacement", NOW + timedelta(seconds=61), lease_seconds=1

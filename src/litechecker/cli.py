@@ -12,11 +12,9 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
-import uvicorn
 from pydantic import ValidationError
 
 from litechecker.agent import run_agent
-from litechecker.collector.app import create_app
 from litechecker.config import AgentSettings, CollectorSettings, StandaloneSettings
 from litechecker.runtime import run_with_signals as _run_with_signals
 from litechecker.security import redact
@@ -29,6 +27,8 @@ from litechecker.standalone import (
 
 
 _LOGGER = logging.getLogger("litechecker.cli")
+uvicorn = None
+create_app = None
 
 
 class AgentUnhealthy(RuntimeError):
@@ -37,6 +37,26 @@ class AgentUnhealthy(RuntimeError):
 
 class StandaloneUnhealthy(RuntimeError):
     pass
+
+
+class CollectorExtraMissing(RuntimeError):
+    pass
+
+
+def _load_collector_runtime():
+    global uvicorn, create_app
+    if uvicorn is not None and create_app is not None:
+        return uvicorn, create_app
+    try:
+        import uvicorn as uvicorn_module
+        from litechecker.collector.app import create_app as create_collector_app
+    except ModuleNotFoundError as exc:
+        if (exc.name or "").partition(".")[0] in {"fastapi", "starlette", "uvicorn"}:
+            raise CollectorExtraMissing from None
+        raise
+    uvicorn = uvicorn_module
+    create_app = create_collector_app
+    return uvicorn, create_app
 
 
 class _SanitizedJsonFormatter(logging.Formatter):
@@ -122,16 +142,17 @@ async def _run_command(arguments: argparse.Namespace) -> None:
             raise AgentUnhealthy("collector-ack-stale")
         return
 
+    uvicorn_runtime, app_factory = _load_collector_runtime()
     settings = CollectorSettings.from_env()
-    app = create_app(settings)
-    config = uvicorn.Config(
+    app = app_factory(settings)
+    config = uvicorn_runtime.Config(
         app,
         host=settings.bind_host,
         port=settings.bind_port,
         log_config=None,
         access_log=False,
     )
-    server = uvicorn.Server(config)
+    server = uvicorn_runtime.Server(config)
     try:
         await server.serve()
     except SystemExit as exc:
@@ -150,6 +171,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         asyncio.run(_run_with_signals(_run_command(arguments)))
     except (ValidationError, ValueError):
         _LOGGER.error("configuration-error")
+        return 2
+    except CollectorExtraMissing:
+        _LOGGER.error("collector-extra-required")
         return 2
     except (asyncio.CancelledError, KeyboardInterrupt):
         _LOGGER.info("shutdown")

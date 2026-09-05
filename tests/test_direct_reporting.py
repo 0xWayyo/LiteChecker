@@ -89,7 +89,7 @@ async def test_completed_cycle_is_saved_before_telegram_send_fails(tmp_path, mon
     monkeypatch.setattr(direct_check, "DirectRelay", Relay)
     monkeypatch.setattr(direct_check, "lookup_exit", lookup_exit)
     monkeypatch.setattr(direct_check, "scoped_dependencies", lambda *args: object())
-    monkeypatch.setattr(direct_check, "run_cycle", cycle)
+    monkeypatch.setattr(direct_check, "measure_cycle", cycle)
     settings = StandaloneSettings.model_construct(
         state_dir=tmp_path, identity=AgentIdentity("test", "City", "PC", 600), agent=object(),
     )

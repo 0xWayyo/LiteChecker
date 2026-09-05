@@ -11,14 +11,16 @@ from filelock import AsyncFileLock, Timeout as FileLockTimeout
 
 from litechecker.agent import (
     AgentDependencies,
-    CurrentReportNotAccepted,
-    _default_dependencies,
-    run_agent,
+    deliver_report,
 )
+from litechecker.async_state import state_call
 from litechecker.collector.db import CollectorDB
 from litechecker.collector.telegram import NotificationDispatcher, TelegramClient
 from litechecker.config import StandaloneSettings
 from litechecker.models import AgentReport
+from litechecker.measurement import (
+    MeasurementDependencies, make_measurement_dependencies, measure_cycle,
+)
 from litechecker.maintenance import cycle_maintenance
 from litechecker.network_identity import (
     NetworkIdentity,
@@ -26,7 +28,7 @@ from litechecker.network_identity import (
     network_display_city,
     network_display_name,
 )
-from litechecker.state import CollectorAckStore
+from litechecker.state import CollectorAckStore, PendingReportStore
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -75,7 +77,7 @@ class _DirectReportSender:
 
     async def send(self, report: AgentReport) -> None:
         try:
-            await asyncio.to_thread(
+            await state_call(
                 self._db.accept_report,
                 report,
                 self._identity,
@@ -86,7 +88,7 @@ class _DirectReportSender:
             raise
         self._latest_event_id = report.event_id
         await self.flush()
-        if self._once and not await asyncio.to_thread(
+        if self._once and not await state_call(
             self._db.notification_delivered, report.event_id
         ):
             raise StandaloneDeliveryError()
@@ -97,16 +99,16 @@ class _DirectReportSender:
             if (
                 self._latest_event_id is not None
                 and self._latest_event_id != self._last_acked_event_id
-                and await asyncio.to_thread(
+                and await state_call(
                     self._db.notification_delivered, self._latest_event_id
                 )
             ):
-                self._ack.record(self._latest_event_id, self._clock())
+                await state_call(self._ack.record, self._latest_event_id, self._clock())
                 self._last_acked_event_id = self._latest_event_id
                 _LOGGER.info("telegram-report-delivered")
-            if await asyncio.to_thread(self._db.dead_letter_count):
+            if await state_call(self._db.dead_letter_count):
                 _LOGGER.error("telegram-delivery-blocked-check-bot-chat-and-restart")
-            elif await asyncio.to_thread(self._db.pending_notification_count):
+            elif await state_call(self._db.pending_notification_count):
                 _LOGGER.warning("telegram-report-queued-for-retry")
         except asyncio.CancelledError:
             raise
@@ -118,7 +120,7 @@ async def run_standalone(
     settings: StandaloneSettings,
     once: bool = False,
     *,
-    dependencies: AgentDependencies | None = None,
+    dependencies: MeasurementDependencies | AgentDependencies | None = None,
     telegram: TelegramClient | None = None,
     network_lookup: Callable[[], Awaitable[NetworkIdentity | None]] | None = None,
     max_cycles: int | None = None,
@@ -132,7 +134,7 @@ async def run_standalone(
         isinstance(max_cycles, bool) or not isinstance(max_cycles, int) or max_cycles < 1
     ):
         raise ValueError("max_cycles must be positive")
-    settings.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    await state_call(settings.state_dir.mkdir, parents=True, exist_ok=True, mode=0o700)
     lock = AsyncFileLock(
         settings.state_dir / "standalone.lock",
         timeout=0,
@@ -155,10 +157,11 @@ async def run_standalone(
 
 
 async def _run_locked(settings, *, once, dependencies, telegram, network_lookup, max_cycles):
-    dependencies = dependencies or _default_dependencies(
+    dependencies = dependencies or make_measurement_dependencies(
         settings.agent, state_dir=settings.state_dir
     )
-    db = CollectorDB(
+    db = await state_call(
+        CollectorDB,
         settings.state_dir / "standalone.sqlite3",
         [settings.identity],
         registry_activated_at=dependencies.wall_clock(),
@@ -177,10 +180,13 @@ async def _run_locked(settings, *, once, dependencies, telegram, network_lookup,
         retry_delay_seconds=_RETRY_SECONDS,
     )
     sender = _DirectReportSender(settings, dependencies, db, dispatcher, once=once)
-    # Agent acceptance here means durable local storage. Only the Telegram sender
-    # may write the health acknowledgement after all chunks are accepted.
-    dependencies = replace(dependencies, sender=sender, ack_store=None)
-    await asyncio.to_thread(db.retry_dead_letters, dependencies.wall_clock())
+    # Retain the legacy pending slot for failed acceptance while SQLite owns
+    # Telegram retries. Measurement dependencies do not own delivery state.
+    pending_store = (
+        dependencies.pending_store if isinstance(dependencies, AgentDependencies)
+        else PendingReportStore(settings.state_dir / "pending-report.json")
+    )
+    await state_call(db.retry_dead_letters, dependencies.wall_clock())
     await sender.flush()
     completed = 0
     auto_network = getattr(settings, "auto_network", False)
@@ -197,15 +203,12 @@ async def _run_locked(settings, *, once, dependencies, telegram, network_lookup,
                 sender.set_network_identity(
                     identity, auto_network=auto_network, auto_city=auto_city,
                 )
-            try:
-                result = await run_agent(
-                    settings.agent, once=once, dependencies=dependencies, max_cycles=1
-                )
-            except CurrentReportNotAccepted:
-                raise StandaloneDeliveryError() from None
-        report = result if isinstance(result, AgentReport) else result[0]
+            measured = await measure_cycle(settings.agent, dependencies)
+            report, accepted = await deliver_report(measured, pending_store, sender)
+            if once and not accepted:
+                raise StandaloneDeliveryError()
         completed += 1
-        if dependencies.last_accepted_event_id != report.event_id:
+        if not accepted:
             _LOGGER.error("standalone-report-retained-for-retry")
         if once or (max_cycles is not None and completed >= max_cycles):
             return report

@@ -13,6 +13,41 @@ def identity(agent_id: str) -> str:
     return json.dumps({"agent_id": agent_id, "state_key": "s" * 32})
 
 
+def test_native_config_allowlist_is_public_and_drives_installer_parsing(tmp_path):
+    from litechecker.native_config import NATIVE_CONFIG_KEYS
+    from litechecker.native_install import _parse_env
+
+    source = tmp_path / ".env.standalone"
+    source.write_text(
+        "\n".join(f"{key}='value'" for key in sorted(NATIVE_CONFIG_KEYS))
+        + "\nLC_ALLOW_PRIVATE_TARGETS='true'\n"
+    )
+
+    parsed = _parse_env(source)
+
+    assert set(parsed) == NATIVE_CONFIG_KEYS
+    assert parsed["LC_INTERVAL_SECONDS"] == "600"
+    assert "LC_ALLOW_PRIVATE_TARGETS" not in parsed
+
+
+def test_public_bounded_reader_preserves_private_and_symlink_guarantees(tmp_path):
+    from litechecker.native_runtime import read_bounded_regular
+
+    source = tmp_path / "private-input"
+    source.write_bytes(b"payload")
+    source.chmod(0o600)
+    assert read_bounded_regular(source, private=True) == b"payload"
+
+    source.chmod(0o644)
+    with pytest.raises(ValueError, match="private input permissions are unsafe"):
+        read_bounded_regular(source, private=True)
+
+    link = tmp_path / "linked-input"
+    link.symlink_to(source)
+    with pytest.raises(ValueError, match="symbolic link input is not allowed"):
+        read_bounded_regular(link)
+
+
 def test_first_install_channel_is_pinned_and_reinstall_preserves_it(tmp_path):
     import base64
     from litechecker.native_install import _install_update_channel
@@ -155,6 +190,31 @@ def test_plist_accepts_uv_python_symlink_only_when_target_stays_in_runtime(tmp_p
     link.symlink_to(outside)
     with pytest.raises(ValueError):
         install_configuration(source, root, plist)
+
+
+def test_native_installer_rejects_symlinked_launch_agents_ancestor(tmp_path):
+    from litechecker.native_install import _write_plist
+
+    root = tmp_path / "root"
+    python = root / ".native-direct/venv/bin/python"
+    python.parent.mkdir(parents=True)
+    python.write_text("python")
+    python.chmod(0o700)
+    xray = root / ".native-direct/xray"
+    xray.write_text("xray")
+    xray.chmod(0o700)
+    actual_parent = tmp_path / "actual-parent"
+    actual_parent.mkdir()
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(actual_parent, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symbolic link"):
+        _write_plist(
+            root,
+            linked_parent / "LaunchAgents/com.litechecker.direct.plist",
+        )
+
+    assert not (actual_parent / "LaunchAgents/com.litechecker.direct.plist").exists()
 
 
 def test_migration_prefers_standalone_identity_and_preserves_canonical_files(tmp_path):

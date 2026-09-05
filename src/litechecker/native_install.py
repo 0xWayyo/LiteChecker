@@ -4,113 +4,29 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import plistlib
-import stat
-import tempfile
 import unicodedata
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from litechecker.native_config import NATIVE_CONFIG_KEYS
+from litechecker.native_runtime import (
+    DIRECT_SERVICE_LABEL,
+    atomic_write as _atomic_write,
+    build_direct_service_plist,
+    ensure_launch_agents_directory,
+    ensure_private_directory as _ensure_private_directory,
+    read_bounded_regular as _read_regular,
+)
 from litechecker.security import is_valid_agent_id
 from litechecker.telegram_proxy import validate_telegram_proxy_url
 
 
-LABEL = "com.litechecker.direct"
+LABEL = DIRECT_SERVICE_LABEL
 SETTINGS_FILE = "native-settings.json"
 _MAX_FILE_BYTES = 65_536
-_ALLOWED_SETTINGS = frozenset({
-    "LC_AGENT_CITY",
-    "LC_AGENT_NAME",
-    "LC_HOST_NAME",
-    "LC_HOST_OS",
-    "LC_TELEGRAM_CHAT_ID",
-    "LC_TELEGRAM_TOPIC_ID",
-    "LC_INTERVAL_SECONDS",
-    "LC_RUN_DEADLINE_SECONDS",
-    "LC_PROBE_TIMEOUT_SECONDS",
-    "LC_TCP_TIMEOUT_SECONDS",
-    "LC_MAX_CONCURRENCY",
-    "LC_MAX_SUBSCRIPTION_BYTES",
-    "LC_MAX_ENDPOINTS",
-    "LC_AUTO_NETWORK",
-    "LC_AUTO_CITY",
-    "LC_EXPECTED_XRAY_VERSION",
-})
+_ALLOWED_SETTINGS = NATIVE_CONFIG_KEYS
 _SECRET_NAMES = ("telegram_bot_token", "subscription_url", "telegram_proxy_url")
-
-
-def _ensure_private_directory(path: Path) -> None:
-    if path.is_symlink():
-        raise ValueError("installation path must not be a symbolic link")
-    path.mkdir(parents=True, exist_ok=True, mode=0o700)
-    metadata = path.stat()
-    if not stat.S_ISDIR(metadata.st_mode):
-        raise ValueError("installation path must be a directory")
-    if os.name == "posix" and metadata.st_uid != os.geteuid():
-        raise ValueError("installation path owner is unsafe")
-    path.chmod(0o700)
-
-
-def _read_regular(path: Path, *, private: bool = False) -> bytes:
-    if path.is_symlink():
-        raise ValueError("symbolic link input is not allowed")
-    flags = (
-        os.O_RDONLY
-        | getattr(os, "O_CLOEXEC", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-        | getattr(os, "O_NONBLOCK", 0)
-    )
-    descriptor = os.open(path, flags)
-    try:
-        metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode) or not 0 < metadata.st_size <= _MAX_FILE_BYTES:
-            raise ValueError("input must be a bounded regular file")
-        if private and os.name == "posix" and (
-            metadata.st_uid != os.geteuid() or metadata.st_mode & 0o077
-        ):
-            raise ValueError("private input permissions are unsafe")
-        data = bytearray()
-        while len(data) < metadata.st_size:
-            chunk = os.read(descriptor, metadata.st_size - len(data))
-            if not chunk:
-                raise ValueError("input changed while reading")
-            data.extend(chunk)
-        if os.read(descriptor, 1):
-            raise ValueError("input changed while reading")
-        return bytes(data)
-    finally:
-        os.close(descriptor)
-
-
-def _atomic_write(path: Path, data: bytes, mode: int, *, private_parent: bool = True) -> None:
-    if private_parent:
-        _ensure_private_directory(path.parent)
-    else:
-        if path.parent.is_symlink():
-            raise ValueError("destination directory must not be a symbolic link")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if not path.parent.is_dir():
-            raise ValueError("destination directory is invalid")
-    if path.is_symlink():
-        raise ValueError("destination must not be a symbolic link")
-    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    temporary_path = Path(temporary)
-    try:
-        os.fchmod(descriptor, mode)
-        with os.fdopen(descriptor, "wb", closefd=True) as output:
-            output.write(data)
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary_path, path)
-        path.chmod(mode)
-    except Exception:
-        try:
-            os.close(descriptor)
-        except OSError:
-            pass
-        temporary_path.unlink(missing_ok=True)
-        raise
 
 
 def _parse_env(path: Path) -> dict[str, str]:
@@ -262,44 +178,10 @@ def _write_settings(source: Path, root: Path) -> None:
 
 
 def _write_plist(root: Path, plist_path: Path) -> None:
-    runtime_python = root / ".native-direct" / "venv" / "bin" / "python"
-    xray = root / ".native-direct" / "xray"
-    runtime_root = (root / ".native-direct").resolve(strict=True)
-    try:
-        resolved_python = runtime_python.resolve(strict=True)
-        resolved_python.relative_to(runtime_root)
-    except (OSError, ValueError) as exc:
-        raise ValueError("native Python escapes its private runtime") from exc
-    metadata = resolved_python.stat()
-    if not stat.S_ISREG(metadata.st_mode) or not os.access(resolved_python, os.X_OK):
-        raise ValueError("native Python is incomplete or unsafe")
-    if xray.is_symlink() or not xray.is_file() or not os.access(xray, os.X_OK):
-        raise ValueError("native Xray is incomplete or unsafe")
-    state_dir = root / "state" / "native-direct"
-    payload = {
-        "Label": LABEL,
-        "ProgramArguments": [
-            str(runtime_python),
-            "-m",
-            "litechecker.direct_service",
-            "--root",
-            str(root),
-            "--xray",
-            str(xray),
-        ],
-        "WorkingDirectory": str(root),
-        "RunAtLoad": True,
-        "KeepAlive": True,
-        "ThrottleInterval": 30,
-        "Umask": 0o077,
-        "ProcessType": "Background",
-        "StandardOutPath": str(state_dir / "service.log"),
-        "StandardErrorPath": str(state_dir / "service.log"),
-        "EnvironmentVariables": {"PYTHONUNBUFFERED": "1"},
-    }
+    ensure_launch_agents_directory(plist_path.parent)
     _atomic_write(
         plist_path,
-        plistlib.dumps(payload, sort_keys=True),
+        plistlib.dumps(build_direct_service_plist(root, root), sort_keys=True),
         0o600,
         private_parent=False,
     )

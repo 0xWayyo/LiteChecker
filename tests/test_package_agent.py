@@ -1,6 +1,8 @@
 """Public builds omit secrets; explicitly private handoff includes only shared secrets."""
 
 import importlib.util
+import hashlib
+import json
 from pathlib import Path
 import zipfile
 
@@ -36,8 +38,6 @@ def test_public_package_does_not_include_deployment_secrets(tmp_path):
 
 def test_optional_public_update_channel_is_packaged_and_manifested(tmp_path):
     import base64
-    import json
-    import hashlib
 
     module = packager(tmp_path)
     channel = json.dumps({
@@ -100,15 +100,13 @@ def test_native_installer_is_shipped_but_native_device_data_is_not(tmp_path, pri
         assert not any(b"private-device-name" in archive.read(name) for name in archive.namelist())
 
 
-def test_trial_package_does_not_replace_regular_private_distribution(tmp_path):
+def test_direct_trial_is_a_compatibility_alias_for_the_one_private_distribution(tmp_path):
     module = packager(tmp_path)
     module.main(["--with-secrets"])
     regular = tmp_path / "dist/LiteChecker-READY-PRIVATE.zip"
-    original = regular.read_bytes()
     module.main(["--with-secrets", "--direct-trial"])
-    assert regular.read_bytes() == original
-    trial = tmp_path / "dist/LiteChecker-DIRECT-TRIAL-PRIVATE.zip"
-    with zipfile.ZipFile(trial) as archive:
+    assert not (tmp_path / "dist/LiteChecker-DIRECT-TRIAL-PRIVATE.zip").exists()
+    with zipfile.ZipFile(regular) as archive:
         assert "LiteChecker/TRY-DIRECT.command" in archive.namelist()
         assert not any(".native-direct" in name or "/state/" in name for name in archive.namelist())
 
@@ -118,7 +116,7 @@ def test_private_package_includes_optional_proxy_with_private_permissions(tmp_pa
     module = packager(tmp_path)
     (tmp_path / "secrets/telegram_proxy_url").write_text("socks5://fixture-user:fixture-password@proxy.invalid:1080\n")
     module.main(["--with-secrets", *(["--direct-trial"] if trial else [])])
-    filename = "LiteChecker-DIRECT-TRIAL-PRIVATE.zip" if trial else "LiteChecker-READY-PRIVATE.zip"
+    filename = "LiteChecker-READY-PRIVATE.zip"
     with zipfile.ZipFile(tmp_path / "dist" / filename) as archive:
         name = "LiteChecker/secrets/telegram_proxy_url"
         assert archive.read(name) == b"socks5://fixture-user:fixture-password@proxy.invalid:1080\n"
@@ -164,3 +162,75 @@ def test_package_rejects_unsafe_optional_proxy_without_disclosing_it(tmp_path, k
         module.main(["--with-secrets"] if private else [])
     assert "never-show-this-value" not in str(failure.value)
     assert not (tmp_path / "dist").exists()
+
+
+def test_package_recursively_includes_nested_runtime_modules_and_manifests_them(tmp_path):
+    module = packager(tmp_path)
+    nested = tmp_path / "src/litechecker/diagnostics/platform/macos.py"
+    nested.parent.mkdir(parents=True)
+    nested.write_text("NESTED_RUNTIME = True\n")
+
+    module.main([])
+
+    archive_path = tmp_path / "dist/LiteChecker-agent.zip"
+    with zipfile.ZipFile(archive_path) as archive:
+        member = "LiteChecker/src/litechecker/diagnostics/platform/macos.py"
+        assert archive.read(member) == b"NESTED_RUNTIME = True\n"
+        manifest = json.loads(archive.read("LiteChecker/CONTENTS.sha256.json"))
+        assert manifest["src/litechecker/diagnostics/platform/macos.py"] == hashlib.sha256(
+            b"NESTED_RUNTIME = True\n"
+        ).hexdigest()
+    assert not (tmp_path / "CONTENTS.sha256.json").exists()
+
+
+def test_package_rejects_runtime_file_beneath_a_symlinked_directory(tmp_path):
+    module = packager(tmp_path)
+    outside = tmp_path / "outside-runtime"
+    outside.mkdir()
+    (outside / "module.py").write_text("SHOULD_NOT_SHIP = True\n")
+    (tmp_path / "src/litechecker/linked").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="regular file"):
+        module.main([])
+
+    assert not (tmp_path / "dist").exists()
+
+
+def test_public_package_keeps_operator_docs_but_omits_author_only_material(tmp_path):
+    module = packager(tmp_path)
+    operator = tmp_path / "docs/operations/runbook.md"
+    operator.parent.mkdir(parents=True, exist_ok=True)
+    operator.write_text("operator runbook\n")
+    author = tmp_path / "docs/development/release-process.md"
+    author.parent.mkdir(parents=True, exist_ok=True)
+    author.write_text("author-only release notes\n")
+    (tmp_path / "tests/private_test.py").parent.mkdir(parents=True)
+    (tmp_path / "tests/private_test.py").write_text("secret fixture\n")
+
+    module.main([])
+
+    with zipfile.ZipFile(tmp_path / "dist/LiteChecker-agent.zip") as archive:
+        names = set(archive.namelist())
+    assert "LiteChecker/docs/operations/runbook.md" in names
+    assert "LiteChecker/docs/development/release-process.md" not in names
+    assert not any("/tests/" in name or "/.github/" in name for name in names)
+
+
+def test_public_package_rejects_unexpected_docs_and_example_junk(tmp_path):
+    module = packager(tmp_path)
+    docs_junk = tmp_path / "docs/operations/.DS_Store"
+    docs_junk.parent.mkdir(parents=True, exist_ok=True)
+    docs_junk.write_bytes(b"desktop metadata")
+    database = tmp_path / "examples/collector.sqlite3"
+    database.parent.mkdir(parents=True, exist_ok=True)
+    database.write_bytes(b"private runtime state")
+    unknown = tmp_path / "examples/operator-private.conf"
+    unknown.write_text("PRIVATE=1\n")
+
+    module.main([])
+
+    with zipfile.ZipFile(tmp_path / "dist/LiteChecker-agent.zip") as archive:
+        names = set(archive.namelist())
+    assert "LiteChecker/docs/operations/.DS_Store" not in names
+    assert "LiteChecker/examples/collector.sqlite3" not in names
+    assert "LiteChecker/examples/operator-private.conf" not in names
