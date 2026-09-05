@@ -423,7 +423,15 @@ async def test_child_exit_after_listener_is_unknown_not_target_down(
     monkeypatch,
 ):
     """Losing Xray during a canary must never become target-specific DOWN evidence."""
-    monkeypatch.setenv("FAKE_XRAY_EXIT_DELAY", "0.08")
+    child = None
+    spawn = asyncio.create_subprocess_exec
+
+    async def capture_child(*args, **kwargs):
+        nonlocal child
+        child = await spawn(*args, **kwargs)
+        return child
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", capture_child)
 
     class Resolver:
         async def resolve(self, target):
@@ -447,7 +455,13 @@ async def test_child_exit_after_listener_is_unknown_not_target_down(
             return False
 
         async def get(self, url):
-            await asyncio.sleep(0.15)
+            # A canary starts only after the listener is owned and healthy.
+            # Observe the real child exit before returning the canary response;
+            # independent parent/child sleeps cannot establish this ordering.
+            assert child is not None
+            assert child.returncode is None
+            child.terminate()
+            await child.wait()
             return Response()
 
     tunnel = XrayTunnel(

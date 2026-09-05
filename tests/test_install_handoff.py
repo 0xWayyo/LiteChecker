@@ -7,8 +7,26 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def macos_handoff_environment(monkeypatch, tmp_path):
+    """Exercise macOS handoff on every runner without changing Python's platform."""
+    from litechecker import install_handoff
+
+    class MacSystem:
+        platform = "darwin"
+
+        def __getattr__(self, name):
+            return getattr(sys, name)
+
+    monkeypatch.setattr(install_handoff, "sys", MacSystem())
+    bin_dir = tmp_path / "macos-bin"
+    _write(bin_dir / "uname", b"#!/bin/sh\nprintf 'Darwin\\n'\n", 0o700)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
 
 
 def _write(path: Path, data: bytes, mode: int = 0o644) -> None:
@@ -64,6 +82,23 @@ def test_pristine_public_bundle_leaves_only_management_launcher(tmp_path):
     assert result["launcher_created"] is True
     assert _source_files(source) == {"LiteChecker.command"}
     assert os.access(source / "LiteChecker.command", os.X_OK)
+
+
+@pytest.mark.parametrize("platform", ["linux", "win32"])
+def test_non_macos_handoff_preserves_entire_bundle(tmp_path, monkeypatch, platform):
+    from litechecker import install_handoff
+
+    source, root, _ = _bundle(tmp_path)
+    before = {name: (source / name).read_bytes() for name in _source_files(source)}
+    monkeypatch.setattr(install_handoff.sys, "platform", platform)
+
+    result = _finish(source, root)
+
+    assert result["ok"] is False
+    assert result["cleaned"] is False
+    assert result["launcher_created"] is False
+    assert _source_files(source) == set(before)
+    assert all((source / name).read_bytes() == data for name, data in before.items())
 
 
 @pytest.mark.parametrize("case", ["modified", "additional", "symlink", "empty-directory"])
