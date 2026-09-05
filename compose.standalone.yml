@@ -1,0 +1,40 @@
+name: litechecker-standalone
+
+services:
+  checker:
+    build:
+      context: .
+    image: litechecker:local
+    user: "${LITECHECKER_UID:?use bash run.sh}:${LITECHECKER_GID:?use bash run.sh}"
+    command: ["standalone"]
+    env_file:
+      - .env.standalone
+    environment:
+      LC_HOST_NAME: "${LC_HOST_NAME:-}"
+      LC_HOST_OS: "${LC_HOST_OS:-}"
+      LC_CONTAINER_MODE: "true"
+    volumes:
+      - ./state/standalone:/var/lib/litechecker
+      - ./secrets/telegram_bot_token:/run/secrets/telegram_bot_token:ro
+      - ./secrets/subscription_url:/run/secrets/subscription_url:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "litechecker", "standalone-health"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"

@@ -1,0 +1,24 @@
+# Fail closed: the build context contains only reviewed package and operator inputs.
+**
+
+!Dockerfile
+!.dockerignore
+!pyproject.toml
+!uv.lock
+
+!src/
+!src/litechecker/
+!src/litechecker/*.py
+!src/litechecker/collector/
+!src/litechecker/collector/*.py
+
+# Tracked, placeholder-only operator examples are intentionally publishable.
+!.env.agent.example
+!.env.collector.example
+!agents.example.json
+!compose.example.yml
+!compose.agent.example.yml
+!deploy/
+!deploy/litechecker-agent.service
+!deploy/com.litechecker.agent.plist
+!README.md

@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.litechecker.agent</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/REPLACE_ME/Library/Application Support/LiteChecker/.venv/bin/python</string>
+    <string>-m</string>
+    <string>litechecker.cli</string>
+    <string>agent</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>LC_AGENT_ID</key>
+    <string>&lt;REPLACE_WITH_AGENT_ID&gt;</string>
+    <key>LC_AGENT_TOKEN_FILE</key>
+    <string>/Users/REPLACE_ME/Library/Application Support/LiteChecker/secrets/agent_token</string>
+    <key>LC_COLLECTOR_URL</key>
+    <string>https://collector.example.invalid</string>
+    <key>LC_SUBSCRIPTION_URL_FILE</key>
+    <string>/Users/REPLACE_ME/Library/Application Support/LiteChecker/secrets/subscription_url</string>
+    <key>LC_STATE_KEY_FILE</key>
+    <string>/Users/REPLACE_ME/Library/Application Support/LiteChecker/secrets/state_key</string>
+    <key>LC_STATE_DIR</key>
+    <string>/Users/REPLACE_ME/Library/Application Support/LiteChecker/state</string>
+    <key>LC_XRAY_BINARY</key>
+    <string>/usr/local/bin/xray</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>/Users/REPLACE_ME/Library/Logs/LiteChecker-agent.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/REPLACE_ME/Library/Logs/LiteChecker-agent.log</string>
+</dict>
+</plist>

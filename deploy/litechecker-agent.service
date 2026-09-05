@@ -1,0 +1,28 @@
+[Unit]
+Description=LiteChecker city probe agent
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=litechecker
+Group=litechecker
+UMask=0077
+EnvironmentFile=/etc/litechecker/agent.env
+Environment=LC_STATE_DIR=/var/lib/litechecker
+Environment=LC_XRAY_BINARY=/usr/local/bin/xray
+ExecStart=/opt/litechecker/.venv/bin/python -m litechecker.cli agent
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/litechecker
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

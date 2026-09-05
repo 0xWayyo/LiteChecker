@@ -1,0 +1,89 @@
+name: litechecker
+
+x-runtime-security: &runtime-security
+  read_only: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=64m
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  restart: unless-stopped
+
+services:
+  caddy:
+    <<: *runtime-security
+    image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    environment:
+      CADDY_DOMAIN: ${CADDY_DOMAIN:?set CADDY_DOMAIN}
+      CADDY_EMAIL: ${CADDY_EMAIL:?set CADDY_EMAIL}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - collector-private
+      - caddy-egress
+    depends_on:
+      collector:
+        condition: service_healthy
+
+  collector:
+    <<: *runtime-security
+    build:
+      context: .
+    image: litechecker:local
+    user: "${LITECHECKER_UID:?set LITECHECKER_UID}:${LITECHECKER_GID:?set LITECHECKER_GID}"
+    command: ["collector"]
+    env_file:
+      - .env.collector
+    volumes:
+      - ./state/collector:/var/lib/litechecker
+      - ./agents.json:/run/secrets/agents.json:ro
+      - ./secrets/telegram_bot_token:/run/secrets/telegram_bot_token:ro
+    networks:
+      - collector-private
+      - collector-egress
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  tbilisi-agent:
+    <<: *runtime-security
+    profiles: ["agent"]
+    image: litechecker:local
+    user: "${LITECHECKER_UID:?set LITECHECKER_UID}:${LITECHECKER_GID:?set LITECHECKER_GID}"
+    command: ["agent"]
+    env_file:
+      - .env.agent
+    volumes:
+      - ./state/tbilisi-agent:/var/lib/litechecker
+      - ./secrets/agent_token:/run/secrets/agent_token:ro
+      - ./secrets/subscription_url:/run/secrets/subscription_url:ro
+      - ./secrets/state_key:/run/secrets/state_key:ro
+    networks:
+      - agent-egress
+    healthcheck:
+      test: ["CMD", "litechecker", "agent-health"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+networks:
+  collector-private:
+    internal: true
+  collector-egress:
+  caddy-egress:
+  agent-egress:
+
+volumes:
+  caddy-data:
+  caddy-config:

@@ -1,0 +1,12 @@
+# Optional Telegram-only transport, selected by run.sh when its secret exists.
+services:
+  checker:
+    environment:
+      LC_TELEGRAM_PROXY_URL_FILE: /run/secrets/telegram_proxy_url
+    volumes:
+      - type: bind
+        source: ./secrets/telegram_proxy_url
+        target: /run/secrets/telegram_proxy_url
+        read_only: true
+        bind:
+          create_host_path: false

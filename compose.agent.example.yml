@@ -1,0 +1,38 @@
+name: litechecker-agent
+
+x-runtime-security: &runtime-security
+  read_only: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=64m
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  restart: unless-stopped
+
+services:
+  agent:
+    <<: *runtime-security
+    build:
+      context: .
+    image: litechecker:local
+    user: "${LITECHECKER_UID:?set LITECHECKER_UID}:${LITECHECKER_GID:?set LITECHECKER_GID}"
+    command: ["agent"]
+    env_file:
+      - .env.agent
+    volumes:
+      - ./state/agent:/var/lib/litechecker
+      - ./secrets/agent_token:/run/secrets/agent_token:ro
+      - ./secrets/subscription_url:/run/secrets/subscription_url:ro
+      - ./secrets/state_key:/run/secrets/state_key:ro
+    networks:
+      - agent-egress
+    healthcheck:
+      test: ["CMD", "litechecker", "agent-health"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+networks:
+  agent-egress:

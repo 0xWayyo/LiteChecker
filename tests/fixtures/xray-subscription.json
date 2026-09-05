@@ -1,0 +1,54 @@
+[
+  {
+    "remarks": "Aggregate profile",
+    "outbounds": [
+      {
+        "protocol": "vless",
+        "tag": "aggregate-vless-source",
+        "settings": {
+          "vnext": [
+            {
+              "address": "198.51.100.10",
+              "port": 443,
+              "users": [{"id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "flow": "xtls-rprx-vision", "encryption": "none"}]
+            },
+            {
+              "address": "edge.example",
+              "port": 443,
+              "users": [{"id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "flow": "xtls-rprx-vision", "encryption": "none"}]
+            }
+          ]
+        },
+        "streamSettings": {
+          "network": "tcp",
+          "security": "reality",
+          "realitySettings": {"serverName": "www.example.com", "publicKey": "fake-reality-public-key", "shortId": "fake-short-id"}
+        }
+      },
+      {"protocol": "freedom", "tag": "direct"}
+    ]
+  },
+  {
+    "remarks": "Duplicate single-server profile",
+    "outbounds": [
+      {
+        "protocol": "vless",
+        "tag": "duplicate-source-tag",
+        "settings": {
+          "vnext": [
+            {
+              "address": "198.51.100.10",
+              "port": 443,
+              "users": [{"id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "flow": "xtls-rprx-vision", "encryption": "none"}]
+            }
+          ]
+        },
+        "streamSettings": {
+          "network": "tcp",
+          "security": "reality",
+          "realitySettings": {"serverName": "www.example.com", "publicKey": "fake-reality-public-key", "shortId": "fake-short-id"}
+        }
+      }
+    ]
+  }
+]

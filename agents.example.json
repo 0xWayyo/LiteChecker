@@ -1,0 +1,8 @@
+{
+  "<REPLACE_WITH_AGENT_ID>": {
+    "token": "REPLACE_WITH_UNIQUE_AGENT_TOKEN",
+    "city": "Tbilisi",
+    "name": "Home ISP",
+    "expected_interval_seconds": 600
+  }
+}
