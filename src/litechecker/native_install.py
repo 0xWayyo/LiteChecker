@@ -215,8 +215,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source", required=True, type=Path)
     parser.add_argument("--root", required=True, type=Path)
     parser.add_argument("--plist", required=True, type=Path)
+    parser.add_argument("--configure", action="store_true", help="ask for missing credentials in a terminal")
     arguments = parser.parse_args(argv)
     install_configuration(arguments.source, arguments.root, arguments.plist)
+    if arguments.configure:
+        from litechecker.device_setup import configure_device
+
+        return configure_device(arguments.root, "native", initial=True)
     return 0
 
 

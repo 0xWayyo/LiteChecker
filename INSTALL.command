@@ -3,6 +3,9 @@
 set +x
 set -uo pipefail
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) || exit 2
+if [[ -t 0 ]]; then
+    exec bash "$project_dir/scripts/control.sh"
+fi
 bash "$project_dir/scripts/install.sh"
 install_exit=$?
 if [[ -t 0 ]]; then

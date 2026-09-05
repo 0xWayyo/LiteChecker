@@ -54,7 +54,13 @@ fi
 [[ ! -L state/install.log ]] || fail 'Журнал state/install.log не должен быть символической ссылкой.'
 [[ ! -e state/install.log || -f state/install.log ]] || fail 'state/install.log должен быть обычным файлом.'
 [[ ! -L .env.standalone ]] || fail 'Файл .env.standalone не должен быть символической ссылкой.'
-if [[ -e .env.standalone ]]; then
+if [[ -t 0 && -f scripts/prepare-updater.sh && ! -L scripts/prepare-updater.sh ]]; then
+    printf '%s\n' 'Подготавливаю среду для пошагового ввода настроек.'
+    bash scripts/prepare-updater.sh --root "$project_dir"
+    PYTHONPATH="$project_dir/src" PYTHONDONTWRITEBYTECODE=1 \
+        "$project_dir/.updater-runtime/venv/bin/python" -m litechecker.device_setup \
+        --root "$project_dir" --system docker --initial
+elif [[ -e .env.standalone ]]; then
     [[ -f .env.standalone ]] || fail '.env.standalone должен быть обычным файлом.'
     printf '%s\n' 'Использую сохранённые настройки этого устройства.'
 else
@@ -66,7 +72,16 @@ chmod 700 state
 : >> state/install.log
 chmod 600 state/install.log
 printf '\n%s\n' 'Загружаю компоненты и запускаю LiteChecker. Это может занять несколько минут.'
-if bash run.sh start > state/install.log 2>&1; then
+start_checker() {
+    # The wizard prepares the updater before the first start. Managed start
+    # deliberately uses --no-build, so an explicit install must build the
+    # baseline image first. Active signed-release selection stays in updater.
+    if [[ -x .updater-runtime/venv/bin/python && -f scripts/update.sh && ! -L scripts/update.sh ]]; then
+        bash run.sh build || return $?
+    fi
+    bash run.sh start
+}
+if start_checker > state/install.log 2>&1; then
     :
 else
     install_exit=$?
@@ -87,4 +102,4 @@ fi
 printf '\n%s\n' 'Контейнер запущен в фоне. Дождитесь первого отчёта в Telegram; это окно можно закрыть.'
 printf '%s\n' 'Проверка работает, пока компьютер включён, не спит и Docker запущен.'
 printf 'Папка установки: %s\n' "$project_dir"
-printf '%s\n' 'Остановить: bash run.sh stop' 'Посмотреть журнал: bash run.sh logs'
+printf '%s\n' 'Управление: снова откройте INSTALL.bat (Windows) или INSTALL.sh (Linux).' 'В меню доступны запуск, остановка, настройки, журнал и ручное обновление.'

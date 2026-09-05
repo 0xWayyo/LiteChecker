@@ -17,7 +17,7 @@ FILES = (
     "Dockerfile", ".dockerignore", "pyproject.toml", "uv.lock",
     "run.sh", "compose.standalone.yml", "compose.telegram-proxy.yml",
     "INSTALL.command", "INSTALL.sh", "INSTALL.bat", "INSTALL.ps1",
-    "scripts/install.sh", "scripts/install-wsl.sh", "НАЧНИТЕ-ЗДЕСЬ.txt",
+    "scripts/install.sh", "scripts/install-wsl.sh", "scripts/control.sh", "НАЧНИТЕ-ЗДЕСЬ.txt",
     "scripts/install-macos.sh", "scripts/native-direct.sh",
     "TRY-DIRECT.command", "scripts/try-direct.sh",
     "scripts/update.sh", "scripts/prepare-updater.sh",

@@ -70,7 +70,7 @@ copy_input() {
     chmod 600 "$install_dir/$name"
 }
 payload=(Dockerfile .dockerignore pyproject.toml uv.lock compose.standalone.yml compose.telegram-proxy.yml run.sh INSTALL.sh scripts/install.sh scripts/install-wsl.sh)
-for name in scripts/update.sh scripts/prepare-updater.sh update-channel.json docs/operations/updates.md; do
+for name in scripts/update.sh scripts/prepare-updater.sh scripts/control.sh update-channel.json docs/operations/updates.md; do
     if [[ -e "$source_dir/$name" || -L "$source_dir/$name" ]]; then
         payload+=("$name")
     fi

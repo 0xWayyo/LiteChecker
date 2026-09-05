@@ -25,7 +25,8 @@ def test_successful_scoped_report_never_claims_isp_or_vpn_bypass():
     observation = ExitObservation("1.1.1.1", "City", "AS123 Network")
     text = format_trial(report(), identity, "en0", observation, observation)
     assert "Всё доступно" not in text
-    assert "Обход VPN не подтверждён" in text
+    assert "Обход VPN" not in text
+    assert "VPN на роутере" not in text
     assert "совпадает" in text
     assert "доступны: 1" in text
     assert "en0" in text
@@ -36,7 +37,9 @@ def test_different_public_ip_still_not_proof_for_every_target():
     text = format_trial(report(), AgentIdentity("test", "City", "PC", 600), "en0",
                         ExitObservation("1.1.1.1"), ExitObservation("8.8.8.8"))
     assert "отличается" in text
-    assert "Обход VPN не подтверждён" in text
+    assert "Обход VPN" not in text
+    assert "Всё доступно" not in text
+    assert "Интерфейс проверок: en0" in text
 
 
 def test_route_failures_are_unknown_not_server_down():

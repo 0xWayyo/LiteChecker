@@ -13,6 +13,11 @@ import time
 from pathlib import Path
 
 
+if sys.argv[1:] == ["--fixture-ready"]:
+    print("fake-xray-ready", flush=True)
+    raise SystemExit(0)
+
+
 capture = Path(os.environ["FAKE_XRAY_CAPTURE"])
 payload = sys.stdin.buffer.read()
 capture.write_bytes(payload)

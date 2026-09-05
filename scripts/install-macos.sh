@@ -95,7 +95,7 @@ verify_payload() {
 }
 
 payload=(pyproject.toml uv.lock run.sh scripts/native-direct.sh scripts/install-macos.sh)
-for relative in scripts/update.sh scripts/prepare-updater.sh update-channel.json docs/operations/updates.md; do
+for relative in scripts/update.sh scripts/prepare-updater.sh scripts/control.sh INSTALL.command update-channel.json docs/operations/updates.md; do
     if [[ -e "$source_root/$relative" || -L "$source_root/$relative" ]]; then
         payload+=("$relative")
     fi
@@ -118,7 +118,7 @@ copy_payload() {
     ensure_destination_parent "$relative"
     cp -p -- "$incoming" "$outgoing"
     case "$relative" in
-      run.sh|scripts/*.sh) chmod 700 "$outgoing" ;;
+      run.sh|scripts/*.sh|INSTALL.command) chmod 700 "$outgoing" ;;
       *) chmod 600 "$outgoing" ;;
     esac
 }
@@ -134,8 +134,10 @@ done
 
 printf '%s\n' 'Подготавливаю закреплённые Python, зависимости и Xray для DIRECT.'
 bash "$root/scripts/native-direct.sh" prepare --root "$root"
+configure_args=(--source "$source_root" --root "$root" --plist "$plist")
+if [[ -t 0 ]]; then configure_args+=(--configure); fi
 PYTHONPATH="$root/src" "$root/.native-direct/venv/bin/python" -m litechecker.native_install \
-    --source "$source_root" --root "$root" --plist "$plist"
+    "${configure_args[@]}"
 
 # Loading production settings is the last native preflight. A legacy container
 # is not touched until runtime, secrets, settings, Xray and plist pass the same
@@ -194,4 +196,4 @@ if [[ -f "$root/.updates/channel.json" && -f "$root/scripts/update.sh" ]]; then
 fi
 printf '\n%s\n' 'LiteChecker DIRECT установлен и запущен без Docker.'
 printf 'Папка установки: %s\n' "$root"
-printf '%s\n' 'Остановить: bash run.sh stop' 'Посмотреть журнал: bash run.sh logs'
+printf '%s\n' 'Управление: снова откройте INSTALL.command — появится меню.' 'Закрытие окна не останавливает проверки. Для остановки используйте пункт меню.'

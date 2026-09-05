@@ -121,7 +121,6 @@ def format_trial(report, identity, interface, scoped_exit, ordinary_exit):
         comparison = "совпадает с выходом проверок" if relation == "совпадает" else "отличается от выхода проверок"
         lines.append(f"Обычный выход: {ordinary_exit.ip} — {comparison}.")
     lines.extend([
-        "⚠️ Обход VPN не подтверждён. Это наблюдения через выбранный интерфейс; VPN на роутере или перенаправление системой не исключены.",
         report.observed_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"),
         f"Подписка: {report.refresh_state}; проверок: {len(report.results)}.",
         "Результаты: " + ", ".join(f"{label}: {sum(r.status is status for r in report.results)}"

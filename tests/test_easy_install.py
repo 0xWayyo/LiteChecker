@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import pty
+import re
 
 import pytest
 
@@ -83,6 +85,43 @@ def calls(env):
     return log.read_text().splitlines() if log.exists() else []
 
 
+def windows_bash_entry():
+    # Exercise the actual Bash handoff chosen by PowerShell. Windows/WSL
+    # discovery itself still requires a real Windows integration check.
+    script = (ROOT / "INSTALL.ps1").read_text(encoding="utf-8-sig")
+    handoff = re.search(r'--exec bash "\$linuxSource/([^"\n]+)"', script)
+    assert handoff, "Windows installer must have an identifiable Bash entry"
+    return handoff.group(1)
+
+
+@pytest.mark.parametrize("setup_exit", [0, 19])
+def test_windows_bash_handoff_installs_with_redirected_input(bundle, local_env, setup_exit):
+    shutil.copy2(ROOT / "scripts/control.sh", bundle / "scripts/control.sh")
+    local_env["WSL_DISTRO_NAME"] = "Ubuntu"
+    local_env["FAIL_SETUP"] = str(setup_exit)
+    result = launch(bundle, local_env, windows_bash_entry())
+    assert calls(local_env) == (["setup --quick", "start", "status"]
+                               if setup_exit == 0 else ["setup --quick"])
+    assert result.returncode == setup_exit
+
+
+def test_windows_bash_handoff_opens_menu_on_terminal(bundle, local_env):
+    (bundle / "scripts/control.sh").write_text(
+        '#!/bin/bash\nprintf "menu\\n" >> "$RUN_LOG"\n'
+    )
+    local_env["WSL_DISTRO_NAME"] = "Ubuntu"
+    master, slave = pty.openpty()
+    try:
+        result = subprocess.run([BASH, str(bundle / windows_bash_entry())],
+                                stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, env=local_env, timeout=10)
+    finally:
+        os.close(master)
+        os.close(slave)
+    assert result.returncode == 0, result.stderr
+    assert calls(local_env) == ["menu"]
+
+
 @pytest.mark.parametrize("entry", ["scripts/install.sh", "INSTALL.sh", "INSTALL.command"])
 def test_installer_locates_its_project_and_sets_up_then_starts(bundle, local_env, entry):
     result = launch(bundle, local_env, entry)
@@ -99,6 +138,76 @@ def test_repeat_installer_preserves_existing_device_configuration(bundle, local_
     assert result.returncode == 0, result.stderr
     assert calls(local_env) == ["start", "status"]
     assert (bundle / ".env.standalone").read_text() == "my existing device settings\n"
+
+
+def test_interactive_linux_install_uses_credential_wizard_before_start(bundle, local_env):
+    (bundle / 'scripts/prepare-updater.sh').write_text('#!/bin/bash\nprintf "prepare\\n" >> "$RUN_LOG"\n')
+    python = bundle / '.updater-runtime/venv/bin/python'
+    python.parent.mkdir(parents=True)
+    python.write_text('#!/bin/bash\nprintf "wizard\\n" >> "$RUN_LOG"\nprintf "configured here\\n" > .env.standalone\n')
+    python.chmod(0o700)
+    master, slave = pty.openpty()
+    try:
+        result = subprocess.run([BASH, str(bundle / 'scripts/install.sh')], stdin=slave,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, env=local_env, timeout=10)
+    finally:
+        os.close(master)
+        os.close(slave)
+    assert result.returncode == 0, result.stderr
+    assert calls(local_env) == ['prepare', 'wizard', 'start', 'status']
+
+
+@pytest.mark.parametrize("old_image,build_exit", [(False, 0), (True, 0), (False, 17)])
+def test_linux_wizard_builds_current_image_before_managed_start(bundle, local_env, old_image, build_exit):
+    # Real run.sh must build before its early updater-runtime handoff. The
+    # external Docker/runtime doubles reject missing or stale baseline images.
+    shutil.copy2(ROOT / "run.sh", bundle / "run.sh")
+    (bundle / "scripts/prepare-updater.sh").write_text(
+        '#!/bin/bash\nprintf "prepare\\n" >> "$RUN_LOG"\n'
+    )
+    python = bundle / ".updater-runtime/venv/bin/python"
+    python.parent.mkdir(parents=True)
+    python.write_text(
+        '#!/bin/bash\nprintf "wizard\\n" >> "$RUN_LOG"\n'
+        'printf "configured\\n" > .env.standalone\n'
+    )
+    python.chmod(0o700)
+    (bundle / "scripts/update.sh").write_text(
+        '#!/bin/bash\nset -eu\ntest "$*" = start\n'
+        'printf "managed:start\\n" >> "$RUN_LOG"\n'
+        'docker compose --env-file .env.standalone -f compose.standalone.yml '
+        'up --detach --force-recreate --no-build --pull never checker\n'
+    )
+    local_env["IMAGE_FILE"] = str(bundle / "test-image")
+    local_env["BUILD_EXIT"] = str(build_exit)
+    if old_image:
+        Path(local_env["IMAGE_FILE"]).write_text("old-source\n")
+    (Path(local_env["PATH"]) / "docker").write_text(
+        '#!/bin/bash\nset -eu\ncase "$*" in\n'
+        '  "info"|"compose version") exit 0 ;;\n'
+        '  "compose --env-file .env.standalone -f compose.standalone.yml build checker")\n'
+        '    printf "build\\n" >> "$RUN_LOG"\n'
+        '    test "$BUILD_EXIT" = 0 || exit "$BUILD_EXIT"\n'
+        '    printf "current-source\\n" > "$IMAGE_FILE" ;;\n'
+        '  "compose --env-file .env.standalone -f compose.standalone.yml up --detach --force-recreate --no-build --pull never checker")\n'
+        '    test -f "$IMAGE_FILE" && test "$(< "$IMAGE_FILE")" = current-source || exit 23\n'
+        '    printf "up\\n" >> "$RUN_LOG" ;;\n'
+        '  "compose --env-file .env.standalone -f compose.standalone.yml ps")\n'
+        '    printf "ps\\n" >> "$RUN_LOG" ;;\n'
+        '  *) exit 99 ;;\nesac\n'
+    )
+    master, slave = pty.openpty()
+    try:
+        result = subprocess.run([BASH, str(bundle / "scripts/install.sh")],
+                                stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, env=local_env, timeout=10)
+    finally:
+        os.close(master)
+        os.close(slave)
+    assert calls(local_env) == (["prepare", "wizard", "build", "managed:start", "up", "ps"]
+                               if build_exit == 0 else ["prepare", "wizard", "build"])
+    assert result.returncode == build_exit, result.stdout + result.stderr
 
 
 def test_private_bundle_real_setup_needs_no_input(bundle, local_env):

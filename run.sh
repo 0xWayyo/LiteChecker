@@ -134,5 +134,11 @@ case "$action" in
     build) "${compose[@]}" build checker ;;
     stop) "${compose[@]}" stop checker ;;
     logs) "${compose[@]}" logs --tail 100 -f checker ;;
-    status) "${compose[@]}" ps ;;
+    status)
+        if [[ "${2:-}" == --state ]]; then
+            "${compose[@]}" ps --all --format '{{.State}}' checker
+        else
+            "${compose[@]}" ps
+        fi
+        ;;
 esac

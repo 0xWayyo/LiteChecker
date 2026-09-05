@@ -96,8 +96,6 @@ def format_report(
         if group:
             lines.extend(["", heading])
             lines.extend(_result_line(result) for result in group)
-    if any(result.check_kind == "sni" for result in failures):
-        lines.extend(["", "Сбой домена SNI сам по себе не означает, что VPN не работает."])
     return "\n".join(lines)
 
 

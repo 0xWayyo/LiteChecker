@@ -85,7 +85,29 @@ def test_mixed_report_separates_target_failure_from_local_dns_failure():
 def test_matching_exit_does_not_claim_vpn_bypass():
     text = render(make_report(), ordinary=SCOPED)
     assert "совпадает" in text
-    assert "не гарант" in text or "не подтвержд" in text
+    assert "Всё доступно через выбранное подключение." in text
+    assert "обход VPN" not in text
+
+
+@pytest.mark.parametrize("sni_failed", [False, True])
+def test_report_ends_with_device_id_without_generic_footnotes(sni_failed):
+    report = make_report()
+    if sni_failed:
+        report = report.model_copy(update={"results": [
+            report.results[0],
+            report.results[1].model_copy(update={
+                "status": ResultStatus.DOWN, "stage": ProbeStage.TLS_CERTIFICATE,
+                "error_code": "tls-certificate",
+            }),
+        ]})
+    text = render(report)
+    assert "Привязка к интерфейсу" not in text
+    assert "сам по себе не означает" not in text
+    assert text.endswith("\n\nID: device-fixture")
+    if sni_failed:
+        assert "SNI — проблемы через en0" in text
+        assert "TLS: сертификат домена не прошёл проверку." in text
+        assert "Всё доступно" not in text
 
 
 def test_unavailable_report_carries_identity_and_time_but_not_raw_exception():

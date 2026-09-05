@@ -57,7 +57,9 @@ class Tcp:
 
 
 @contextlib.asynccontextmanager
-async def origin(*, hostname="sni.example.invalid", trusted=True, tls=True):
+async def origin(
+    *, hostname="sni.example.invalid", trusted=True, tls=True, client_hello_received=None
+):
     authority = trustme.CA()
     server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     authority.issue_cert(hostname).configure_cert(server_context)
@@ -75,7 +77,14 @@ async def origin(*, hostname="sni.example.invalid", trusted=True, tls=True):
         try:
             # No application response is needed; even an origin returning 403 is
             # reachable if its authenticated TLS handshake succeeds.
-            received.append(await reader.read())
+            prefix = b""
+            if client_hello_received is not None:
+                prefix = await reader.read(1)
+                if prefix:
+                    prefix += await reader.readexactly(5)
+                    if prefix[0] == 22 and prefix[5] == 1:  # TLS record / ClientHello.
+                        client_hello_received.set()
+            received.append(prefix + await reader.read())
         finally:
             writer.close()
             with contextlib.suppress(Exception):
@@ -158,22 +167,73 @@ async def test_sni_stalled_tls_is_bounded_and_closes_connection(sni_target):
 
 
 @pytest.mark.asyncio
-async def test_sni_run_deadline_cancels_tls_without_leaking_connection(sni_target):
-    async with origin(tls=False) as (port, context, _, received):
-        results = await probe_all(
-            [sni_target.model_copy(update={"port": port})],
+async def test_sni_run_deadline_cancels_pending_tcp_before_tls(sni_target):
+    cancelled = asyncio.Event()
+
+    class PendingTcp:
+        async def check(self, target, addresses):
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+    class MustNotStartTls:
+        async def check(self, target, address):
+            raise AssertionError("The run deadline must also cover the TCP stage")
+
+    results = await asyncio.wait_for(
+        probe_all(
+            [sni_target],
             control=ControlResult(ok=True),
             resolver=Resolver(["127.0.0.1"]),
-            tls=_TlsDiagnostic(10, context=context),
+            tcp=PendingTcp(),
+            tls=MustNotStartTls(),
             allow_private_targets=True,
             max_concurrency=1,
             deadline_seconds=0.05,
-        )
+        ),
+        timeout=1,
+    )
 
     assert results[0].status is ResultStatus.UNKNOWN
     assert results[0].stage is ProbeStage.DEADLINE
+    assert results[0].error_code == "deadline"
     assert results[0].check_kind == "sni"
+    assert cancelled.is_set()
+
+
+@pytest.mark.asyncio
+async def test_sni_run_cancellation_during_tls_closes_connections(sni_target):
+    client_hello_received = asyncio.Event()
+    async with origin(tls=False, client_hello_received=client_hello_received) as (
+        port, context, _, received
+    ):
+        batch = asyncio.create_task(
+            probe_all(
+                [sni_target.model_copy(update={"port": port})],
+                control=ControlResult(ok=True),
+                resolver=Resolver(["127.0.0.1"]),
+                tls=_TlsDiagnostic(10, context=context),
+                allow_private_targets=True,
+                max_concurrency=1,
+                # Cancellation is triggered by ClientHello, not by a startup-time guess.
+                deadline_seconds=10,
+            )
+        )
+        try:
+            await asyncio.wait_for(client_hello_received.wait(), timeout=1)
+            assert not batch.done()
+            batch.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(batch, timeout=1)
+        finally:
+            if not batch.done():
+                batch.cancel()
+                await asyncio.gather(batch, return_exceptions=True)
+
     assert len(received) == 2
+    assert b"" in received  # The separate TCP diagnostic closed without sending data.
+    assert any(data[:1] == b"\x16" and data[5:6] == b"\x01" for data in received)
 
 
 @pytest.mark.asyncio

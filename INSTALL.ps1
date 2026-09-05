@@ -38,7 +38,7 @@ try {
     if (-not $linuxSource.StartsWith('/')) {
         throw 'Не удалось определить путь к распакованной папке в Ubuntu.'
     }
-    & wsl.exe --distribution $distribution --exec bash "$linuxSource/scripts/install-wsl.sh" $linuxSource
+    & wsl.exe --distribution $distribution --exec bash "$linuxSource/INSTALL.sh"
     exit $LASTEXITCODE
 } catch {
     Write-Host ''

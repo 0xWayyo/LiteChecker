@@ -275,7 +275,8 @@ def test_failed_sni_is_separate_from_healthy_vpn_and_explains_certificate_error(
     assert "SNI: 1 · недоступны: 1" in rendered
     assert "SNI — доступность доменов напрямую" in rendered
     assert "TLS: сертификат домена не прошёл проверку." in rendered
-    assert "сам по себе не означает, что VPN не работает" in rendered
+    assert "сам по себе не означает" not in rendered
+    assert rendered.endswith("TLS: сертификат домена не прошёл проверку.")
     assert "Healthy VPN" not in rendered
 
 

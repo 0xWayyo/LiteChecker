@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import ssl
+import subprocess
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -71,14 +72,32 @@ class FakeXray:
     connects_file: Path
 
 
-@pytest.fixture
-def fake_xray(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeXray:
+@pytest.fixture(scope="session")
+def fake_xray_executable(tmp_path_factory: pytest.TempPathFactory) -> Path:
     source = Path(__file__).parent / "fakes" / "fake_xray.py"
-    executable = tmp_path / "fake-xray"
+    executable = tmp_path_factory.mktemp("fake-xray") / "fake-xray"
     shutil.copyfile(source, executable)
     executable.chmod(0o700)
+    # macOS cold execution of a new script can consume a whole startup deadline.
+    # Prepare one executable before timing real, independently owned child runs.
+    ready = subprocess.run(
+        [str(executable), "--fixture-ready"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert ready.stdout == "fake-xray-ready\n"
+    return executable
+
+
+@pytest.fixture
+def fake_xray(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_xray_executable: Path
+) -> FakeXray:
+    executable = fake_xray_executable
     captured_config = tmp_path / "config.json"
-    captured_args = executable.with_suffix(".args.json")
+    captured_args = tmp_path / "args.json"
     pid_file = tmp_path / "xray.pid"
     connects_file = tmp_path / "connects"
     monkeypatch.setenv("FAKE_XRAY_CAPTURE", str(captured_config))
@@ -96,6 +115,25 @@ def _process_exists(pid: int) -> bool:
     except ProcessLookupError:
         return False
     return True
+
+
+@pytest.mark.asyncio
+async def test_xray_startup_deadline_rejects_a_child_without_listener(
+    target, fake_xray, monkeypatch
+):
+    """A live child that never listens must not outlive its startup allowance."""
+    monkeypatch.setenv("FAKE_XRAY_MODE", "no-listen")
+
+    with pytest.raises(XrayUnavailable) as raised:
+        async with asyncio.timeout(1):
+            async with XrayProcess(
+                fake_xray.executable,
+                startup_timeout=0.2,
+                shutdown_timeout=0.1,
+            ).open(target):
+                pytest.fail("a child without a listener cannot open a tunnel")
+
+    assert raised.value.error_code == "xray-startup-timeout"
 
 
 @pytest.mark.asyncio

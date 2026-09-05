@@ -77,12 +77,7 @@ def format_direct(report: AgentReport, identity: AgentIdentity, interface: str,
                 title, *details = _direct_result_line(result).splitlines()
                 lines.append(title)
                 lines.extend(f"│ {detail.lstrip()}" for detail in details)
-    lines.extend([
-        "", f"ID: {_clean_field(identity.agent_id, 128)}",
-        "Привязка к интерфейсу не гарантирует обход VPN на роутере или системных фильтров.",
-    ])
-    if any(r.check_kind == "sni" for r in failures):
-        lines.append("Сбой SNI-домена сам по себе не означает отказ VPN.")
+    lines.extend(["", f"ID: {_clean_field(identity.agent_id, 128)}"])
     return "\n".join(lines)
 
 
