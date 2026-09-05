@@ -394,7 +394,8 @@ def test_process_identity_accepts_only_managed_base_python_with_exact_venv_argv(
     assert not state.process_matches(root, saved, "supervisor")
 
 
-def test_python_launch_does_not_inherit_launcher_or_python_overrides(tmp_path, monkeypatch):
+@pytest.mark.parametrize("system_root_key", ["SystemRoot", "SYSTEMROOT"])
+def test_python_launch_does_not_inherit_launcher_or_python_overrides(tmp_path, monkeypatch, system_root_key):
     state = module("windows_process_state")
     root = root_at(tmp_path)
     venv = root / ".windows-native/venv/Scripts/python.exe"
@@ -409,13 +410,18 @@ def test_python_launch_does_not_inherit_launcher_or_python_overrides(tmp_path, m
     monkeypatch.setenv("__PYVENV_LAUNCHER__", "untrusted.exe")
     monkeypatch.setenv("PYTHONPATH", "untrusted")
     monkeypatch.setenv("LC_SUBSCRIPTION_URL", "SECRET")
-    monkeypatch.setenv("SystemRoot", "controlled-system-root")
+    monkeypatch.delenv("SystemRoot", raising=False)
+    monkeypatch.delenv("SYSTEMROOT", raising=False)
+    monkeypatch.setenv(system_root_key, "controlled-system-root")
     assert callable(getattr(state, "python_launch", None)), "direct managed interpreter launch is missing"
     executable, environment = state.python_launch(root)
     assert executable == base
     assert environment["__PYVENV_LAUNCHER__"] == str(venv)
-    assert environment["SystemRoot"] == "controlled-system-root"
-    assert "PYTHONPATH" not in environment and "LC_SUBSCRIPTION_URL" not in environment
+    # os.environ normalizes names to uppercase on Windows. Preserve the value,
+    # not POSIX-only mixed-case dictionary spelling.
+    normalized = {name.upper(): value for name, value in environment.items()}
+    assert normalized["SYSTEMROOT"] == "controlled-system-root"
+    assert "PYTHONPATH" not in normalized and "LC_SUBSCRIPTION_URL" not in normalized
 
 
 def native_application(tmp_path):

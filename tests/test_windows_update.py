@@ -171,7 +171,7 @@ async def test_real_signed_stopped_update_and_tamper_preserve_private_state(tmp_
     runner = Runner()
     adapter = windows_runtime.WindowsUpdateAdapter(root, runner=runner, powershell=Path("powershell.exe"))
     result = await check_for_update(root, adapter, force=True, fetcher=fetch)
-    assert result["status"] == "updated"
+    assert result["status"] == "updated", result
     assert result["version"] == "0.6.0"
     assert await adapter.is_running() is False
     assert all("--validate" in args or "Prepare" in args for args, *_ in runner.calls)
@@ -206,7 +206,7 @@ async def test_real_signed_transaction_rolls_back_failed_worker_activation(tmp_p
     host = Host()
     adapter = windows_runtime.WindowsUpdateAdapter(root, host=host, runner=Runner(), powershell=Path("powershell.exe"))
     result = await check_for_update(root, adapter, force=True, fetcher=fetch)
-    assert result["status"] == "rolled-back"
+    assert result["status"] == "rolled-back", result
     assert host.activations == [(root / ".updates/releases/0.6.0", True), (root, True)]
     assert select_release(root) == root
     assert (root / "windows-state/settings.json").read_bytes() == b"preserve-private-settings"

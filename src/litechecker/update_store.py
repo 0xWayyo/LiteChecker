@@ -482,7 +482,7 @@ class UpdateStore:
                 if not windows_security.is_windows():
                     destination.chmod(mode or 0o600)
             digest_file = work / ARTIFACT_DIGEST
-            digest_file.write_text(archive.sha256 + "\n")
+            digest_file.write_bytes(archive.sha256.encode("ascii") + b"\n")
             if not windows_security.is_windows():
                 digest_file.chmod(0o600)
             os.replace(work, target)

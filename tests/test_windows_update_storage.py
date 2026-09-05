@@ -149,6 +149,29 @@ def test_windows_staged_source_reuse_does_not_compare_posix_executable_bits(tmp_
         store.stage("0.5.0", archive)
 
 
+def test_staged_digest_is_canonical_lf_despite_windows_text_newlines(tmp_path, monkeypatch):
+    # Emulate only the text-mode newline boundary; store and launcher are real.
+    from windows_test_support import secure_test_directory
+
+    secure_test_directory(tmp_path)
+    write_text = Path.write_text
+    def windows_write_text(path, data, *args, **kwargs):
+        if path.name == update_store.ARTIFACT_DIGEST and kwargs.get("newline") is None:
+            kwargs["newline"] = "\r\n"
+        return write_text(path, data, *args, **kwargs)
+    monkeypatch.setattr(Path, "write_text", windows_write_text)
+    store = update_store.UpdateStore(tmp_path)
+    archive = update_store.validate_source_zip(source_zip())
+    release = store.stage("0.5.0", archive)
+    digest = (release / update_store.ARTIFACT_DIGEST).read_bytes()
+    assert len(digest) == 65
+    assert digest == archive.sha256.encode("ascii") + b"\n"
+    state = update_store.default_install_state()
+    state["active"] = "0.5.0"
+    store.write_install(state)
+    assert update_launcher.select_release(tmp_path) == release
+
+
 @pytest.mark.parametrize("member", ["windows-state/settings.json", ".windows-native/tools/xray.exe", "Scripts/A.py", "scripts/a.py"])
 def test_windows_private_paths_and_case_collisions_cannot_be_release_members(member):
     files = {member: b"private-or-colliding", "scripts/a.py": b"source"}

@@ -111,7 +111,11 @@ def _assert_preserved(root, store):
 
 def _stage_retained_releases(store, key):
     for version in ("0.2.0", "0.3.0"):
-        store.stage(version, _signed_archive(version, key))
+        archive = _signed_archive(version, key)
+        release = store.stage(version, archive)
+        digest = (release / update_store.ARTIFACT_DIGEST).read_bytes()
+        assert len(digest) == 65
+        assert digest == archive.sha256.encode("ascii") + b"\n"
     state = update_store.default_install_state()
     state.update(active="0.3.0", previous="0.2.0")
     store.write_install(state)
