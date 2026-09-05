@@ -424,10 +424,55 @@ def test_python_launch_does_not_inherit_launcher_or_python_overrides(tmp_path, m
     assert "PYTHONPATH" not in normalized and "LC_SUBSCRIPTION_URL" not in normalized
 
 
+def native_fault_diagnostic(error):
+    """Test-only diagnostic: no exception text, arguments, locals or full paths."""
+    from pathlib import Path
+
+    result = []
+    known_files = {"windows_control.py", "windows_worker.py", "windows_process_state.py",
+                   "windows_security.py", "windows_job.py", "windows_trial.py", "config.py",
+                   "direct_service.py", "state.py", "update_launcher.py", "update_store.py"}
+    for _ in range(4):
+        if error is None:
+            break
+        item = {"type": type(error).__name__[:64], "frames": []}
+        for name in ("errno", "winerror"):
+            value = getattr(error, name, None)
+            if type(value) is int:
+                item[name] = value
+        trace = error.__traceback__
+        while trace is not None and len(item["frames"]) < 12:
+            code = trace.tb_frame.f_code
+            filename = Path(code.co_filename).name
+            if filename in known_files:
+                item["frames"].append(f"{filename}:{code.co_name[:64]}")
+            trace = trace.tb_next
+        result.append(item)
+        error = error.__cause__ or error.__context__
+    return result
+
+
+def test_native_fault_diagnostic_preserves_winerror_without_exception_text():
+    function = globals().get("native_fault_diagnostic")
+    assert callable(function), "native startup failures need a bounded secret-free diagnostic"
+    cause = PermissionError(13, "SECRET token and URL")
+    cause.winerror = 32
+    try:
+        raise RuntimeError("SECRET second message") from cause
+    except RuntimeError as error:
+        observed = function(error)
+    assert observed[0]["type"] == "RuntimeError"
+    assert observed[1]["type"] == "PermissionError"
+    assert observed[1]["winerror"] == 32 and observed[1]["errno"] == 13
+    assert "SECRET" not in json.dumps(observed)
+    assert len(observed) <= 4
+
+
 def native_application(tmp_path):
     """A real isolated Python host; only the external measurement is controlled."""
     import shutil
     import subprocess
+    import inspect
 
     root = root_at(tmp_path)
     runtime = root / ".windows-native"
@@ -455,10 +500,26 @@ def native_application(tmp_path):
     source = str(Path(__file__).resolve().parents[1] / "src")
     packages = [path for path in sys.path if "site-packages" in path]
     entry.write_text(
-        "import asyncio, sys\nfrom pathlib import Path\n"
+        "import asyncio, json, sys\nfrom pathlib import Path\n"
         f"sys.path[:0] = {[source, *packages]!r}\n"
         "from litechecker import windows_control, windows_worker\n"
         "from litechecker.direct_check import TrialResult\n"
+        + inspect.getsource(native_fault_diagnostic) + "\n"
+        + f"fault_root = Path({str(root / 'windows-state')!r})\n"
+        "supervisor_run = windows_control.Supervisor.run\n"
+        "worker_run = windows_worker.run_worker\n"
+        "async def observed_supervisor(self):\n"
+        "    try: return await supervisor_run(self)\n"
+        "    except BaseException as error:\n"
+        "        (fault_root / 'fixture-supervisor-fault.json').write_text(json.dumps(native_fault_diagnostic(error)), encoding='utf-8')\n"
+        "        raise\n"
+        "async def observed_worker(*args):\n"
+        "    try: return await worker_run(*args)\n"
+        "    except BaseException as error:\n"
+        "        (fault_root / 'fixture-worker-fault.json').write_text(json.dumps(native_fault_diagnostic(error)), encoding='utf-8')\n"
+        "        raise\n"
+        "windows_control.Supervisor.run = observed_supervisor\n"
+        "windows_worker.run_worker = observed_worker\n"
         "async def controlled_measurement(settings, **kwargs):\n"
         "    child = await asyncio.create_subprocess_exec(sys.executable, '-I', '-c', 'import time; time.sleep(120)')\n"
         "    (settings.state_dir / 'controlled-child.txt').write_text(str(child.pid))\n"
@@ -479,14 +540,36 @@ def native_application(tmp_path):
 @pytest.mark.asyncio
 @pytest.mark.skipif(sys.platform != "win32", reason="requires native Windows process and Job Object semantics")
 @pytest.mark.parametrize("crash", [False, True], ids=["cooperative-stop", "supervisor-crash"])
-async def test_native_supervisor_worker_and_child_lifecycle(tmp_path, crash):
+@pytest.mark.parametrize("attempt", [1, 2, 3], ids=["attempt-1", "attempt-2", "attempt-3"])
+async def test_native_supervisor_worker_and_child_lifecycle(tmp_path, monkeypatch, crash, attempt):
     import asyncio
     control = module("windows_control")
     root = native_application(tmp_path)
+    launches = []
+    original_spawn = control._spawn_supervisor
+
+    async def observed_spawn(*args):
+        process = await original_spawn(*args)
+        launches.append(process)
+        return process
+
+    monkeypatch.setattr(control, "_spawn_supervisor", observed_spawn)
+
+    def failed_start_details(first):
+        details = {"result": first, "attempt": attempt,
+                   "created": [{"pid": process.pid, "returncode": process.poll()} for process in launches]}
+        for role in ("supervisor", "worker"):
+            path = root / "windows-state" / f"fixture-{role}-fault.json"
+            try:
+                details[role] = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+            except (OSError, ValueError):
+                details[role] = "fixture-diagnostic-unavailable"
+        return details
+
     supervisor_pid = worker_pid = child_pid = None
     try:
         first = await control.start(root)
-        assert first["status"] == "started", first
+        assert first["status"] == "started", failed_start_details(first)
         supervisor_pid = first["pid"]
         second = await control.start(root)
         assert second["status"] == "already-running" and second["pid"] == supervisor_pid
@@ -509,6 +592,15 @@ async def test_native_supervisor_worker_and_child_lifecycle(tmp_path, crash):
         assert not any(psutil.pid_exists(pid) for pid in (supervisor_pid, worker_pid, child_pid))
         assert control.status(root)["state"] == "stopped"
     finally:
+        # A failed Start assertion still owns the exact process it launched.
+        # Do not leave that process running merely because no ready PID record
+        # was observed, and never substitute an unverified PID from a file.
+        for created in launches:
+            if created.poll() is None:
+                await control.stop(root)
+                if created.poll() is None:
+                    created.kill()
+                await asyncio.to_thread(created.wait, 5)
         if supervisor_pid and psutil.pid_exists(supervisor_pid):
             await control.stop(root)
             if psutil.pid_exists(supervisor_pid):
