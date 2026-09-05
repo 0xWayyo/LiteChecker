@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -161,7 +162,8 @@ def install_fixture(tmp_path):
         'case "$*" in *"litechecker.native_install"*|*"service_settings"*) exec "$PYTHON_BIN" "$@";; esac\n',
     )
     env, command_log = native_env(tmp_path, root)
-    env["PYTHON_BIN"] = str(SOURCE / ".venv/bin/python")
+    # The test runner's environment need not live inside this source checkout.
+    env["PYTHON_BIN"] = sys.executable
     docker = Path(env["PATH"].split(os.pathsep)[0]) / "docker"
     make_script(
         docker,

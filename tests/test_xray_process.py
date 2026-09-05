@@ -620,7 +620,9 @@ async def test_default_owner_rejects_stale_process_identity(
     with pytest.raises(XrayUnavailable) as raised:
         async with XrayProcess(
             fake_xray.executable,
-            startup_timeout=1,
+            # Cold execution of the temporary fixture may exceed one second
+            # on macOS. This test asserts PID reuse, not startup latency.
+            startup_timeout=5,
         ).open(target):
             pass
 
