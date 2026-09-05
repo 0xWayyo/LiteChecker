@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package current working source and examples without local deployment secrets."""
+"""Package the client runtime and installers, not developer or operator tooling."""
 
 from __future__ import annotations
 
@@ -14,22 +14,15 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = (
-    "Dockerfile", ".dockerignore", ".gitignore", "pyproject.toml", "uv.lock",
-    "README.md", "compose.agent.example.yml",
-    "compose.example.yml", "Caddyfile",
-    "examples/.env.agent.example", "examples/.env.collector.example",
-    "examples/.env.compose.example", "examples/.env.standalone.example",
-    "examples/agents.example.json",
-    "deploy/com.litechecker.agent.plist", "deploy/litechecker-agent.service",
-    "scripts/backup_sqlite.py", "scripts/restore_sqlite.py",
+    "Dockerfile", ".dockerignore", "pyproject.toml", "uv.lock",
     "run.sh", "compose.standalone.yml", "compose.telegram-proxy.yml",
     "INSTALL.command", "INSTALL.sh", "INSTALL.bat", "INSTALL.ps1",
     "scripts/install.sh", "scripts/install-wsl.sh", "НАЧНИТЕ-ЗДЕСЬ.txt",
     "scripts/install-macos.sh", "scripts/native-direct.sh",
     "TRY-DIRECT.command", "scripts/try-direct.sh",
     "scripts/update.sh", "scripts/prepare-updater.sh",
+    "docs/operations/updates.md",
 )
-PUBLIC_DOC_TREES = ("docs/installation", "docs/operations")
 
 
 def _read_release_input(path: Path) -> bytes:
@@ -85,8 +78,6 @@ def main(argv=None) -> None:
     arguments = parser.parse_args(argv)
     selected = [ROOT / name for name in FILES]
     selected += _tree_files("src/litechecker", suffixes=frozenset({".py"}))
-    for tree in PUBLIC_DOC_TREES:
-        selected += _tree_files(tree, suffixes=frozenset({".md"}))
     contents = {}
     for path in selected:
         contents[path.relative_to(ROOT).as_posix()] = _read_release_input(path)

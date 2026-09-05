@@ -196,23 +196,45 @@ def test_package_rejects_runtime_file_beneath_a_symlinked_directory(tmp_path):
     assert not (tmp_path / "dist").exists()
 
 
-def test_public_package_keeps_operator_docs_but_omits_author_only_material(tmp_path):
+@pytest.mark.parametrize("private", [False, True])
+def test_client_package_omits_development_and_collector_deployment_material(tmp_path, private):
     module = packager(tmp_path)
-    operator = tmp_path / "docs/operations/runbook.md"
-    operator.parent.mkdir(parents=True, exist_ok=True)
-    operator.write_text("operator runbook\n")
-    author = tmp_path / "docs/development/release-process.md"
-    author.parent.mkdir(parents=True, exist_ok=True)
-    author.write_text("author-only release notes\n")
-    (tmp_path / "tests/private_test.py").parent.mkdir(parents=True)
-    (tmp_path / "tests/private_test.py").write_text("secret fixture\n")
+    omitted = (
+        ".gitignore", "README.md", "Caddyfile", "compose.example.yml",
+        "compose.agent.example.yml", "examples/.env.agent.example",
+        "examples/.env.collector.example", "examples/.env.compose.example",
+        "examples/.env.standalone.example", "examples/agents.example.json",
+        "deploy/com.litechecker.agent.plist", "deploy/litechecker-agent.service",
+        "scripts/backup_sqlite.py", "scripts/restore_sqlite.py",
+        "docs/installation/agent.md", "docs/operations/full-reference.md",
+        "docs/operations/direct-trial.md", "docs/operations/runbook.md",
+        "docs/development/release-process.md", "tests/private_test.py",
+        ".github/workflows/ci.yml", ".superpowers/internal-report.md",
+    )
+    for name in omitted:
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("repository-only material\n")
 
-    module.main([])
+    module.main(["--with-secrets"] if private else [])
 
-    with zipfile.ZipFile(tmp_path / "dist/LiteChecker-agent.zip") as archive:
+    filename = "LiteChecker-READY-PRIVATE.zip" if private else "LiteChecker-agent.zip"
+    with zipfile.ZipFile(tmp_path / "dist" / filename) as archive:
         names = set(archive.namelist())
-    assert "LiteChecker/docs/operations/runbook.md" in names
-    assert "LiteChecker/docs/development/release-process.md" not in names
+        manifest = json.loads(archive.read("LiteChecker/CONTENTS.sha256.json"))
+    assert not names.intersection(f"LiteChecker/{name}" for name in omitted)
+    for name in (
+        "НАЧНИТЕ-ЗДЕСЬ.txt", "INSTALL.command", "INSTALL.bat", "INSTALL.ps1",
+        "INSTALL.sh", "TRY-DIRECT.command", "Dockerfile", ".dockerignore",
+        "pyproject.toml", "uv.lock", "compose.standalone.yml",
+        "compose.telegram-proxy.yml", "run.sh", "scripts/install.sh",
+        "scripts/install-macos.sh", "scripts/install-wsl.sh",
+        "scripts/native-direct.sh", "scripts/try-direct.sh",
+        "scripts/update.sh", "scripts/prepare-updater.sh",
+        "docs/operations/updates.md", "src/litechecker/__init__.py",
+    ):
+        assert f"LiteChecker/{name}" in names
+        assert name in manifest
     assert not any("/tests/" in name or "/.github/" in name for name in names)
 
 

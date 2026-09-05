@@ -44,9 +44,9 @@ IP, но не получает имя компьютера, токен или п
 не выполняется. В обычном Docker-режиме IP может относиться к VPN-серверу.
 Привязка к интерфейсу не гарантирует обход VPN на роутере или Kill Switch.
 TRY-DIRECT.command — отдельная разовая проба, не основной установщик.
-Подробнее — docs/installation/agent.md.
-
-Остановка и дополнительные настройки: docs/installation/agent.md.
+Остановить: bash run.sh stop. Посмотреть журнал: bash run.sh logs.
+Подробная инструкция и дополнительные настройки:
+https://github.com/0xWayyo/LiteChecker/blob/main/docs/installation/agent.md
 
 Обновления программы: если в пакете настроен update-channel.json,
 установщик подключит проверку подписанных версий раз в час.

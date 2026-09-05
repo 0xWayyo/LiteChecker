@@ -644,7 +644,7 @@ esac""",
     archive = checkout / "dist/LiteChecker-agent.zip"
     validated = validate_source_zip(archive.read_bytes())
     assert validated.sha256
-    assert any(file.path.as_posix() == "README.md" for file in validated.files)
+    assert any(file.path.as_posix() == "НАЧНИТЕ-ЗДЕСЬ.txt" for file in validated.files)
 
 
 def test_client_markdown_links_resolve_inside_archive_or_use_https():
@@ -655,13 +655,6 @@ def test_client_markdown_links_resolve_inside_archive_or_use_https():
     spec.loader.exec_module(packager)
 
     inventory = set(packager.FILES)
-    for tree in packager.PUBLIC_DOC_TREES:
-        inventory.update(
-            path.relative_to(ROOT).as_posix()
-            for path in (ROOT / tree).rglob("*.md")
-            if path.is_file()
-        )
-
     for source_name in sorted(name for name in inventory if name.endswith(".md")):
         source = ROOT / source_name
         body = source.read_text(encoding="utf-8")
