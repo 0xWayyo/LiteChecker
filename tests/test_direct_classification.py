@@ -142,6 +142,11 @@ async def test_scoped_tls_passes_custom_handshake_budget_and_server_name(setting
 @pytest.mark.parametrize("code, status, stage, reason", [
     ("direct_dns_timeout", ResultStatus.UNKNOWN, ProbeStage.POLICY, "direct-dns:direct_dns_timeout"),
     ("direct_dns_failed", ResultStatus.UNKNOWN, ProbeStage.POLICY, "direct-dns:direct_dns_failed"),
+    ("direct_doh_tls_failed", ResultStatus.UNKNOWN, ProbeStage.POLICY, "direct-dns:direct_doh_tls_failed"),
+    ("direct_doh_http_failed", ResultStatus.UNKNOWN, ProbeStage.POLICY, "direct-dns:direct_doh_http_failed"),
+    ("direct_doh_invalid_http", ResultStatus.UNKNOWN, ProbeStage.POLICY, "direct-dns:direct_doh_invalid_http"),
+    ("direct_doh_response_too_large", ResultStatus.UNKNOWN, ProbeStage.POLICY, "direct-dns:direct_doh_response_too_large"),
+    ("direct_doh_connection_failed", ResultStatus.UNKNOWN, ProbeStage.POLICY, "direct-dns:direct_doh_connection_failed"),
     ("direct_dns_nxdomain", ResultStatus.DOWN, ProbeStage.DNS, "dns-failed"),
     ("private-token-looking-error", ResultStatus.UNKNOWN, ProbeStage.POLICY, "direct-dns:direct_network_unavailable"),
 ])

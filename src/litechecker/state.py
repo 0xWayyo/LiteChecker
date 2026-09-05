@@ -489,7 +489,8 @@ def _atomic_write_json(path: Path, value: Mapping[str, Any]) -> None:
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary_path = Path(temporary_name)
     try:
-        os.fchmod(descriptor, 0o600)
+        if hasattr(os, "fchmod"):
+            os.fchmod(descriptor, 0o600)
         with os.fdopen(descriptor, "wb") as file:
             file.write(encoded)
             file.flush()

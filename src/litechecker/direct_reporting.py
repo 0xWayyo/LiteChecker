@@ -12,7 +12,7 @@ from litechecker.models import AgentReport, ResultStatus
 
 
 def format_direct(report: AgentReport, identity: AgentIdentity, interface: str,
-                  scoped_exit, ordinary_exit) -> str:
+                  scoped_exit, ordinary_exit, *, platform_label="macOS") -> str:
     # Import lazily: the shared measurement runner selects this formatter only
     # for production; the original one-shot trial retains its own presentation.
     from litechecker.direct_check import _direct_result_line
@@ -27,7 +27,7 @@ def format_direct(report: AgentReport, identity: AgentIdentity, interface: str,
     city = scoped_exit.city if scoped_exit and scoped_exit.city else "город не определён"
     interface = _clean_field(interface, 32)
     lines = [
-        f"{'✅' if healthy else '⚠️'} LiteChecker · DIRECT (macOS) · {_clean_field(city, 112)}"
+        f"{'✅' if healthy else '⚠️'} LiteChecker · DIRECT ({_clean_field(platform_label, 32)}) · {_clean_field(city, 112)}"
         f" · {_utc_text(report.observed_at)} · {_clean_field(identity.name, 128)}",
         "",
     ]
@@ -81,7 +81,7 @@ def format_direct(report: AgentReport, identity: AgentIdentity, interface: str,
     return "\n".join(lines)
 
 
-def format_unavailable(identity: AgentIdentity, reason: str, observed_at: datetime) -> str:
+def format_unavailable(identity: AgentIdentity, reason: str, observed_at: datetime, *, platform_label="macOS") -> str:
     explanations = {
         "direct-interface-unavailable": "Физический интерфейс или его DNS недоступен/неоднозначен.",
         "direct-exit-unavailable": "Не удалось проверить выход через физический интерфейс (сеть/DNS/IPinfo).",
@@ -89,7 +89,7 @@ def format_unavailable(identity: AgentIdentity, reason: str, observed_at: dateti
         "cycle-failed": "Локальная проверка завершилась с ошибкой.",
     }
     return "\n".join([
-        f"⚠️ LiteChecker · DIRECT (macOS) · {_utc_text(observed_at)} · {_clean_field(identity.name, 128)}",
+        f"⚠️ LiteChecker · DIRECT ({_clean_field(platform_label, 32)}) · {_utc_text(observed_at)} · {_clean_field(identity.name, 128)}",
         "",
         "Проверка через физическое подключение не выполнена.",
         explanations.get(reason, "Локальная проверка недоступна; отказ серверов не установлен."),

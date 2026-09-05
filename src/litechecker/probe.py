@@ -10,6 +10,7 @@ import json
 import secrets
 import socket
 import ssl
+import sys
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
@@ -133,6 +134,7 @@ class XrayProcess:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
+                creationflags=0x08000000 if sys.platform == "win32" else 0,  # CREATE_NO_WINDOW
             )
         except FileNotFoundError:
             raise XrayUnavailable("xray-missing") from None

@@ -10,6 +10,11 @@ import re
 import stat
 import sys
 
+if __package__:
+    from . import windows_security
+else:  # The stable POSIX entry also executes this file directly.
+    import windows_security
+
 
 VERSION = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\Z")
 
@@ -27,6 +32,17 @@ def checked_path(root: Path, path: Path, *, regular: bool = False) -> Path:
         raise LauncherError() from None
     if ".." in relative.parts or root.is_symlink() or not root.is_dir():
         raise LauncherError()
+    if windows_security.is_windows():
+        try:
+            windows_security.reject_reparse_points(path)
+            windows_security.assert_private_directory(root)
+            directory = root
+            for component in relative.parts:
+                directory /= component
+                if directory.is_dir():
+                    windows_security.assert_private_directory(directory)
+        except (OSError, ValueError):
+            raise LauncherError() from None
     current = root
     for component in relative.parts:
         current = current / component
@@ -56,10 +72,14 @@ def read_json(root: Path, path: Path) -> dict:
 
 def read_bytes(root: Path, path: Path, maximum=65536) -> bytes:
     checked_path(root, path, regular=True)
+    windows = windows_security.is_windows()
+    if windows:
+        windows_security.assert_private_directory(root)
+        windows_security.assert_private_file(path)
     fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     try:
         metadata = os.fstat(fd)
-        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > maximum or metadata.st_uid != os.geteuid() or metadata.st_mode & 0o022:
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > maximum or (not windows and (metadata.st_uid != os.geteuid() or metadata.st_mode & 0o022)):
             raise LauncherError()
         data = bytearray()
         while chunk := os.read(fd, min(8192, maximum + 1 - len(data))):
@@ -95,7 +115,18 @@ def select_release(root: Path) -> Path:
 
 
 def runtime_python(release: Path, *, system: str | None = None) -> Path:
-    native = (system or sys.platform) in {"darwin", "Darwin"}
+    selected_system = system or sys.platform
+    if selected_system in {"Windows", "win32"}:
+        executable = release / ".windows-native/venv/Scripts/python.exe"
+        try:
+            checked_path(release, executable, regular=True)
+            windows_security.reject_reparse_points(executable)
+            windows_security.assert_private_directory(release)
+            windows_security.assert_private_file(executable)
+        except (OSError, ValueError):
+            raise LauncherError() from None
+        return executable
+    native = selected_system in {"darwin", "Darwin"}
     runtime = release / (".native-direct" if native else ".updater-runtime")
     executable = runtime / "venv/bin/python"
     checked_path(release, executable.parent)

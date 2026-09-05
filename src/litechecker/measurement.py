@@ -6,6 +6,7 @@ import asyncio
 import os
 import re
 import secrets
+import sys
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
@@ -487,6 +488,7 @@ async def query_xray_version(
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
+            creationflags=0x08000000 if sys.platform == "win32" else 0,  # CREATE_NO_WINDOW
         )
     except (FileNotFoundError, OSError):
         return XrayVersionResult(None, False, "xray-version-unavailable")

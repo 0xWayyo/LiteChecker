@@ -88,7 +88,7 @@ def calls(env):
 def windows_bash_entry():
     # Exercise the actual Bash handoff chosen by PowerShell. Windows/WSL
     # discovery itself still requires a real Windows integration check.
-    script = (ROOT / "INSTALL.ps1").read_text(encoding="utf-8-sig")
+    script = (ROOT / "INSTALL-WSL.ps1").read_text(encoding="utf-8-sig")
     handoff = re.search(r'--exec bash "\$linuxSource/([^"\n]+)"', script)
     assert handoff, "Windows installer must have an identifiable Bash entry"
     return handoff.group(1)

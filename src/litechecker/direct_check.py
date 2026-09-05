@@ -105,10 +105,10 @@ def uncertain_results(results, faults):
         else result for result in results]
 
 
-def format_trial(report, identity, interface, scoped_exit, ordinary_exit):
+def format_trial(report, identity, interface, scoped_exit, ordinary_exit, *, platform_label="macOS"):
     # No normal 'all available' banner: host/router filters can still redirect
     # scoped sockets, even when getsockopt confirms the requested interface.
-    lines = ["🧪 LiteChecker · пробный DIRECT (macOS)",
+    lines = [f"🧪 LiteChecker · пробный DIRECT ({platform_label})",
              f"Устройство: {identity.name} ({identity.agent_id})",
              f"Интерфейс проверок: {interface}"]
     if scoped_exit:
@@ -152,6 +152,13 @@ def _direct_result_line(result):
         "direct_dns_timeout": "истекло время ожидания DNS-сервера",
         "direct_dns_failed": "DNS-сервер подключения не ответил корректно",
         "direct_dns_invalid_response": "получен некорректный ответ DNS",
+        "direct_doh_connection_failed": "не удалось подключиться к DNS через HTTPS",
+        "direct_doh_tls_failed": "не удалось подтвердить защищённое соединение с DNS через HTTPS",
+        "direct_doh_tls_protocol": "DNS через HTTPS выбрал неподдерживаемый протокол",
+        "direct_doh_http_failed": "DNS через HTTPS вернул ошибку HTTP",
+        "direct_doh_invalid_http": "DNS через HTTPS вернул некорректный или неполный ответ",
+        "direct_doh_response_too_large": "ответ DNS через HTTPS превышает допустимый размер",
+        "direct_doh_invalid_request": "не удалось подготовить запрос DNS через HTTPS",
         "dhcp_dns_unavailable": "DNS подключения недоступен",
         "interface_binding_failed": "не удалось привязать соединение к физическому интерфейсу",
         "interface_changed": "физический интерфейс изменился во время проверки",
@@ -187,6 +194,9 @@ _DIRECT_ERROR_CODES = frozenset({
     "direct_connection_timeout", "direct_connection_unreachable",
     "direct_dns_no_addresses", "direct_dns_failed", "direct_dns_timeout",
     "direct_dns_nxdomain", "direct_relay_start_failed",
+    "direct_doh_connection_failed", "direct_doh_tls_failed", "direct_doh_tls_protocol",
+    "direct_doh_http_failed", "direct_doh_invalid_http", "direct_doh_response_too_large",
+    "direct_doh_invalid_request",
 })
 _REMOTE_CONNECT_CODES = {
     "direct_connection_timeout": "tcp-timeout",
@@ -351,7 +361,8 @@ def scoped_dependencies(settings, network, relay):
     return dependencies
 
 
-async def run_trial(settings, *, send=False, telegram=None, production=False):
+async def run_trial(settings, *, send=False, telegram=None, production=False,
+                    network_factory=None, platform_label="macOS", validate_after=False):
     """One bounded experiment; never silently fall back to the ordinary route."""
     if production and send:
         raise ValueError("production-direct-delivery-owned-by-service")
@@ -368,7 +379,7 @@ async def run_trial(settings, *, send=False, telegram=None, production=False):
             await client.send_chunks(chunk_message(text))
 
     try:
-        network = await MacDirectNetwork.discover()
+        network = await (network_factory or MacDirectNetwork.discover)()
     except DirectNetworkUnavailable:
         observed_at = datetime.now(UTC)
         if production:
@@ -376,11 +387,12 @@ async def run_trial(settings, *, send=False, telegram=None, production=False):
 
             text = format_unavailable(
                 settings.identity, "direct-interface-unavailable", observed_at,
+                platform_label=platform_label,
             )
             return TrialResult(
                 text, False, reason="direct-interface-unavailable", observed_at=observed_at,
             )
-        text = ("🧪 LiteChecker · пробный DIRECT\n"
+        text = (f"🧪 LiteChecker · пробный DIRECT ({platform_label})\n"
                 "⚠️ Проверка через физическое подключение не выполнена.\n"
                 "Интерфейс или его DNS недоступен/неоднозначен. VPN мог запретить прямой выход.\n"
                 "Настройки VPN не изменены; обычный маршрут для проверок не использован.")
@@ -397,18 +409,33 @@ async def run_trial(settings, *, send=False, telegram=None, production=False):
 
                 text = format_unavailable(
                     settings.identity, "direct-exit-unavailable", observed_at,
+                    platform_label=platform_label,
                 )
                 return TrialResult(
                     text, False, reason="direct-exit-unavailable",
                     observed_at=observed_at, interface=network.interface,
                 )
-            text = (f"🧪 LiteChecker · пробный DIRECT · {network.interface}\n"
+            text = (f"🧪 LiteChecker · пробный DIRECT ({platform_label}) · {network.interface}\n"
                     "⚠️ Проверка не выполнена: контроль выхода через физический интерфейс не прошёл.\n"
                     "Возможны блокировка VPN, сбой DNS, IPinfo или сети. На обычный маршрут проверки не переключались.")
             await deliver(text)
             return TrialResult(text, False)
         dependencies = scoped_dependencies(settings, network, relay)
         report = await measure_cycle(settings.agent, dependencies)
+        if validate_after:
+            try:
+                network._validate_interface()
+            except DirectNetworkUnavailable:
+                # A changed adapter invalidates attribution even for open flows
+                # which completed successfully. Do not retain green data.
+                report = report.model_copy(update={
+                    "run_status": ResultStatus.UNKNOWN,
+                    "run_reason": "direct-interface-changed",
+                    "results": [result.model_copy(update={
+                        "status": ResultStatus.UNKNOWN, "stage": ProbeStage.POLICY,
+                        "error_code": "direct-interface-changed", "latency_ms": None,
+                    }) for result in report.results],
+                })
         save_last_observation(settings.state_dir, report, interface=network.interface,
                               scoped_exit=scoped_exit, ordinary_exit=ordinary_exit)
         if production:
@@ -416,10 +443,12 @@ async def run_trial(settings, *, send=False, telegram=None, production=False):
 
             text = format_direct(
                 report, settings.identity, network.interface, scoped_exit, ordinary_exit,
+                platform_label=platform_label,
             )
         else:
             text = format_trial(
                 report, settings.identity, network.interface, scoped_exit, ordinary_exit,
+                platform_label=platform_label,
             )
         await deliver(text)
         return TrialResult(

@@ -22,6 +22,9 @@ FILES = (
     "TRY-DIRECT.command", "scripts/try-direct.sh",
     "scripts/update.sh", "scripts/prepare-updater.sh",
     "docs/operations/updates.md",
+    "LiteChecker.bat", "WINDOWS.md",
+    "scripts/windows-native.ps1", "scripts/windows-app-entry.py",
+    "scripts/windows-entry.py",
 )
 
 

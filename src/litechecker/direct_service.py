@@ -99,6 +99,9 @@ async def run_service(
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     telegram_factory: Callable[[StandaloneSettings], Any] = telegram_client,
     max_cycles: int | None = None,
+    platform_label: str = "macOS",
+    on_ready: Callable[[], None] | None = None,
+    result_observer: Callable[[TrialResult], None] | None = None,
 ) -> TrialResult:
     """Run immediately and then at non-overlapping 600-second start cadence."""
     if max_cycles is not None and (
@@ -128,6 +131,9 @@ async def run_service(
                 sleep=sleep,
                 telegram_factory=telegram_factory,
                 max_cycles=max_cycles,
+                platform_label=platform_label,
+                on_ready=on_ready,
+                result_observer=result_observer,
             )
     except FileLockTimeout:
         raise ServiceAlreadyRunning() from None
@@ -148,10 +154,15 @@ async def _run_locked(
     sleep: Callable[[float], Awaitable[None]],
     telegram_factory: Callable[[StandaloneSettings], Any],
     max_cycles: int | None,
+    platform_label: str,
+    on_ready: Callable[[], None] | None,
+    result_observer: Callable[[TrialResult], None] | None,
 ) -> TrialResult:
     outbox = DirectOutbox(settings.state_dir / "direct-outbox.json")
     status = _initial_status(settings, wall_clock(), outbox)
     _write_status(settings.state_dir, status)
+    if on_ready is not None:
+        on_ready()
     delivery_failed = False
     if send and outbox.next_chunk() is not None:
         delivery_failed = not await _drain(outbox, settings, telegram_factory, wall_clock)
@@ -160,7 +171,7 @@ async def _run_locked(
 
     completed = 0
     result = TrialResult(
-        format_unavailable(settings.identity, "cycle-failed", _utc(wall_clock())),
+        format_unavailable(settings.identity, "cycle-failed", _utc(wall_clock()), platform_label=platform_label),
         False,
         reason="cycle-failed",
         observed_at=_utc(wall_clock()),
@@ -170,6 +181,7 @@ async def _run_locked(
             result, started_mono, delivery_failed = await _measured_cycle(
                 settings, status, outbox, send, cycle, monotonic, wall_clock,
                 telegram_factory, delivery_failed,
+                platform_label, result_observer,
             )
 
         completed += 1
@@ -203,6 +215,7 @@ async def _run_locked(
 async def _measured_cycle(
     settings, status, outbox, send, cycle, monotonic, wall_clock,
     telegram_factory, delivery_failed,
+    platform_label, result_observer,
 ):
     started_mono = monotonic()
     started_at = _utc(wall_clock())
@@ -223,7 +236,7 @@ async def _measured_cycle(
     except TimeoutError:
         observed_at = _utc(wall_clock())
         result = TrialResult(
-            format_unavailable(settings.identity, "cycle-timeout", observed_at),
+            format_unavailable(settings.identity, "cycle-timeout", observed_at, platform_label=platform_label),
             False,
             reason="cycle-timeout",
             observed_at=observed_at,
@@ -231,12 +244,14 @@ async def _measured_cycle(
     except Exception:
         observed_at = _utc(wall_clock())
         result = TrialResult(
-            format_unavailable(settings.identity, "cycle-failed", observed_at),
+            format_unavailable(settings.identity, "cycle-failed", observed_at, platform_label=platform_label),
             False,
             reason="cycle-failed",
             observed_at=observed_at,
         )
 
+    if result_observer is not None:
+        result_observer(result)
     cycle_state = _cycle_state(result)
     status.update(
         cycle_finished_at=_utc(wall_clock()).isoformat(),

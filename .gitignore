@@ -21,3 +21,5 @@ secrets/
 .updater-runtime/
 .updates/
 .superpowers/
+.windows-native/
+windows-state/

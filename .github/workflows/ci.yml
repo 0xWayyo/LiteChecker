@@ -39,3 +39,34 @@ jobs:
           "from pathlib import Path;
           from litechecker.update_store import validate_source_zip;
           validate_source_zip(Path('dist/LiteChecker-agent.zip').read_bytes())"
+  windows-native:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.8.22"
+          python-version: "3.12.11"
+          enable-cache: false
+      - name: Install locked native dependencies
+        run: uv sync --frozen --all-groups
+      - name: Test native runtime, process ownership, ACLs and update transactions
+        # Author-only ZIP builders run on Linux/macOS above. These tests actually
+        # execute Windows Job Objects, private NTFS ACLs, BAT and PowerShell 5.1.
+        run: >-
+          uv run --no-sync pytest
+          tests/test_windows_network.py tests/test_windows_trial.py
+          tests/test_windows_diagnostics.py tests/test_windows_doh.py
+          tests/test_windows_doh_preflight.py tests/test_windows_control.py
+          tests/test_windows_child_process.py
+          tests/test_windows_app.py tests/test_windows_app_entry.py
+          tests/test_windows_bootstrap.py tests/test_windows_update.py
+          tests/test_windows_update_storage.py tests/test_windows_update_native.py
+      - name: Prepare actual pinned Windows runtime from a clean folder
+        env:
+          LC_WINDOWS_BOOTSTRAP_SMOKE: "1"
+        run: uv run --no-sync pytest tests/test_windows_bootstrap_runtime.py -v

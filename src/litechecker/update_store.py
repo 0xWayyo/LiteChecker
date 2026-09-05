@@ -18,6 +18,7 @@ import uuid
 import zipfile
 
 from .update_manifest import SHA256_RE, VERSION_RE
+from . import windows_security
 
 
 MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
@@ -36,6 +37,7 @@ FORBIDDEN_COMPONENTS = frozenset(
         ".updates",
         ".updater-runtime",
         ".venv",
+        ".windows-native",
         "__pycache__",
         "dist",
         "node_modules",
@@ -43,6 +45,7 @@ FORBIDDEN_COMPONENTS = frozenset(
         "secrets",
         "state",
         "venv",
+        "windows-state",
     }
 )
 WINDOWS_RESERVED = frozenset(
@@ -343,6 +346,9 @@ class UpdateStore:
         if not self.root.is_absolute() or not self.root.is_dir() or self.root.is_symlink():
             raise StoreError("updater root is unsafe")
         try:
+            if windows_security.is_windows():
+                windows_security.assert_private_directory(self.root)
+                windows_security.reject_reparse_points(self.updates)
             if self.root.resolve(strict=True) != self.root:
                 raise StoreError("updater root contains a symbolic link")
             if hasattr(os, "getuid") and self.root.stat().st_uid != os.getuid():
@@ -361,10 +367,15 @@ class UpdateStore:
     def ensure_layout(self) -> None:
         self._validate_root()
         for directory in (self.updates, self.releases, self.temporary):
+            if windows_security.is_windows():
+                windows_security.reject_reparse_points(directory)
             if directory.exists() and (directory.is_symlink() or not directory.is_dir()):
                 raise StoreError("managed updater directory is unsafe")
             directory.mkdir(mode=0o700, exist_ok=True)
-            directory.chmod(0o700)
+            if windows_security.is_windows():
+                windows_security.assert_private_directory(directory)
+            else:
+                directory.chmod(0o700)
 
     def _atomic_json(self, path: Path, value: dict) -> None:
         self.ensure_layout()
@@ -372,6 +383,10 @@ class UpdateStore:
             raise StoreError("state destination is unsafe")
         if path.is_symlink():
             raise StoreError("state destination is unsafe")
+        if windows_security.is_windows():
+            windows_security.reject_reparse_points(path)
+            if path.exists():
+                windows_security.assert_private_file(path)
         payload = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
         temporary = self.updates / f".{path.name}.{uuid.uuid4().hex}.tmp"
         descriptor = os.open(
@@ -381,12 +396,16 @@ class UpdateStore:
         )
         try:
             with os.fdopen(descriptor, "wb") as output:
-                os.fchmod(output.fileno(), 0o600)
+                if not windows_security.is_windows():
+                    os.fchmod(output.fileno(), 0o600)
                 output.write(payload)
                 output.flush()
                 os.fsync(output.fileno())
             os.replace(temporary, path)
-            path.chmod(0o600)
+            if windows_security.is_windows():
+                windows_security.assert_private_file(path)
+            else:
+                path.chmod(0o600)
             if os.name == "posix":
                 directory = os.open(self.updates, os.O_RDONLY)
                 try:
@@ -405,6 +424,8 @@ class UpdateStore:
             return default_install_state()
         if self.install_path.is_symlink() or not self.install_path.is_file():
             raise StoreError("install state path is unsafe")
+        if windows_security.is_windows():
+            windows_security.assert_private_file(self.install_path)
         try:
             descriptor = os.open(
                 self.install_path,
@@ -434,6 +455,8 @@ class UpdateStore:
             raise StoreError("release archive was not validated")
         self.ensure_layout()
         target = self.releases / version
+        if windows_security.is_windows():
+            windows_security.reject_reparse_points(target)
         if target.exists() or target.is_symlink():
             if self._release_matches(target, archive):
                 return target
@@ -442,7 +465,8 @@ class UpdateStore:
         try:
             work.mkdir(mode=0o700)
             (work / OWNED_MARKER).write_bytes(OWNED_MARKER_BYTES)
-            (work / OWNED_MARKER).chmod(0o600)
+            if not windows_security.is_windows():
+                (work / OWNED_MARKER).chmod(0o600)
             for item in archive.files:
                 relative = _safe_relative(item.path.as_posix())
                 destination = work.joinpath(*relative.parts)
@@ -455,10 +479,12 @@ class UpdateStore:
                 with destination.open("xb") as output:
                     output.write(item.data)
                 mode = item.mode & 0o755
-                destination.chmod(mode or 0o600)
+                if not windows_security.is_windows():
+                    destination.chmod(mode or 0o600)
             digest_file = work / ARTIFACT_DIGEST
             digest_file.write_text(archive.sha256 + "\n")
-            digest_file.chmod(0o600)
+            if not windows_security.is_windows():
+                digest_file.chmod(0o600)
             os.replace(work, target)
             return target
         except BaseException:
@@ -472,8 +498,11 @@ class UpdateStore:
         if marker.is_symlink() or not marker.is_file():
             return False
         try:
+            if windows_security.is_windows():
+                windows_security.assert_private_directory(path)
+                windows_security.assert_private_file(marker)
             return marker.read_bytes() == OWNED_MARKER_BYTES
-        except OSError:
+        except (OSError, ValueError):
             return False
 
     def _release_matches(self, target: Path, archive: ValidatedArchive) -> bool:
@@ -490,6 +519,8 @@ class UpdateStore:
             for item in archive.files:
                 relative = _safe_relative(item.path.as_posix())
                 source = target.joinpath(*relative.parts)
+                if windows_security.is_windows():
+                    windows_security.assert_private_file(source)
                 if source.is_symlink() or not source.is_file():
                     return False
                 cursor = source.parent
@@ -502,16 +533,43 @@ class UpdateStore:
                 if hashlib.sha256(source.read_bytes()).digest() != hashlib.sha256(item.data).digest():
                     return False
                 expected_executable = bool(item.mode & 0o111)
-                if bool(source.stat().st_mode & 0o111) != expected_executable:
+                if not windows_security.is_windows() and bool(source.stat().st_mode & 0o111) != expected_executable:
                     return False
-        except OSError:
+        except (OSError, ValueError):
             return False
         return True
 
     def _remove_owned(self, path: Path, parent: Path) -> bool:
         if not self._owned_directory(path, parent):
             return False
-        shutil.rmtree(path)
+        if windows_security.is_windows():
+            # Keep the ownership marker until every other child is gone. Windows
+            # can refuse deletion of a loaded image; losing the marker first
+            # would make that safe deferred cleanup permanently unrecoverable.
+            try:
+                for directory, directories, files in os.walk(path, followlinks=False):
+                    for name in (*directories, *files):
+                        windows_security.reject_reparse_points(Path(directory) / name)
+                for entry in path.iterdir():
+                    if entry.name == OWNED_MARKER:
+                        continue
+                    if entry.is_dir():
+                        shutil.rmtree(entry)
+                    else:
+                        entry.unlink()
+                marker = path / OWNED_MARKER
+                marker.unlink()
+                try:
+                    path.rmdir()
+                except OSError:
+                    # A late sharing failure must still leave an owned retry.
+                    with marker.open("xb") as output:
+                        output.write(OWNED_MARKER_BYTES)
+                    return False
+            except (OSError, ValueError):
+                return False
+        else:
+            shutil.rmtree(path)
         return True
 
     def remove_release(self, version: str) -> bool:
@@ -534,6 +592,8 @@ class UpdateStore:
                 continue
             if self._remove_owned(entry, self.releases):
                 counts["releases"] += 1
+            elif windows_security.is_windows() and self._owned_directory(entry, self.releases):
+                counts["deferred"] = counts.get("deferred", 0) + 1
         cutoff = now.astimezone(timezone.utc).timestamp() - STALE_TEMP_SECONDS
         for entry in tuple(self.temporary.iterdir()):
             if (
@@ -548,4 +608,6 @@ class UpdateStore:
                 continue
             if stale and self._remove_owned(entry, self.temporary):
                 counts["temporary"] += 1
+            elif stale and windows_security.is_windows() and self._owned_directory(entry, self.temporary):
+                counts["deferred"] = counts.get("deferred", 0) + 1
         return counts

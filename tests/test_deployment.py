@@ -132,7 +132,7 @@ def test_web_stack_is_an_explicit_collector_extra_and_version_is_candidate():
         "project"
     ]
 
-    assert project["version"] == "0.4.0"
+    assert project["version"] == "0.5.0"
     assert not {"fastapi", "uvicorn"} & {
         requirement.split("[", 1)[0].split("=", 1)[0].split("<", 1)[0]
         for requirement in project["dependencies"]
