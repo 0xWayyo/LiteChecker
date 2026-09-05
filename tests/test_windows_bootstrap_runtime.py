@@ -54,6 +54,7 @@ def test_real_candidate_prepare_and_isolated_validation(tmp_path):
          "-File", str(candidate / "scripts" / "windows-native.ps1"),
          "-Root", str(baseline), "-Action", "Prepare"],
         cwd=candidate, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=900,
+        env={**os.environ, "PSModulePath": str(tmp_path / "intentionally-empty-modules")},
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert settings.read_bytes() == before

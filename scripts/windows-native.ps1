@@ -11,6 +11,11 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $OutputEncoding = [Console]::OutputEncoding
+$systemModulePath = [System.IO.Path]::Combine($PSHOME, "Modules")
+if (-not [System.IO.Directory]::Exists($systemModulePath)) {
+    throw [System.InvalidOperationException]::new("Windows PowerShell system modules are unavailable.")
+}
+$env:PSModulePath = $systemModulePath
 
 $UvVersion = "0.8.22"
 $UvUrl = "https://github.com/astral-sh/uv/releases/download/0.8.22/uv-x86_64-pc-windows-msvc.zip"
@@ -127,7 +132,7 @@ function Get-PrivateAclIdentities {
 
 function Assert-PrivateRootAcl([string]$Path) {
     $current = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-    $acl = Get-Acl -LiteralPath $Path
+    $acl = [System.IO.Directory]::GetAccessControl($Path)
     $owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier])
     if (-not $owner.Equals($current)) {
         Fail "Владелец папки _app не совпадает с текущим пользователем."
@@ -168,7 +173,7 @@ function Protect-PrivateRoot([string]$Path) {
         )
         [void]$security.AddAccessRule($rule)
     }
-    Set-Acl -LiteralPath $Path -AclObject $security
+    [System.IO.Directory]::SetAccessControl($Path, $security)
     Assert-PrivateRootAcl $Path
 }
 

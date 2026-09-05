@@ -7,6 +7,7 @@ import importlib.util
 import ipaddress
 import socket
 import struct
+from types import SimpleNamespace
 import uuid
 
 import pytest
@@ -130,9 +131,20 @@ class NativeAPI:
 def native(monkeypatch):
     from litechecker import windows_network as m
     api = NativeAPI(m)
+    # Proactor uses isinstance(..., socket.socket) for its own wake-up pipe.
+    # Keep test socket overrides local to the measured network module.
+    monkeypatch.setattr(m, "socket", SimpleNamespace(**vars(socket)))
     monkeypatch.setattr(m.sys, "platform", "win32")
     monkeypatch.setattr(m, "_load_ip_helper", lambda: api)
     return m, api
+
+
+def test_winsock_boundary_fixture_does_not_replace_asyncio_stdlib_socket(native, monkeypatch):
+    m, _ = native
+    original = socket.socket
+    monkeypatch.setattr(m.socket, "socket", lambda *args: None)
+    assert socket.socket is original, "Windows Proactor must retain the real stdlib socket class"
+    assert isinstance(socket.socket, type)
 
 
 @pytest.mark.asyncio

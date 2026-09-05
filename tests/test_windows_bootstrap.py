@@ -1,3 +1,4 @@
+import os
 import shutil
 import subprocess
 import sys
@@ -89,6 +90,7 @@ if(-not $failed){throw 'wrong gate accepted'}
          "-ScriptPath", str(REPOSITORY / "scripts" / "windows-native.ps1"),
          "-Baseline", str(baseline)],
         text=True, capture_output=True, timeout=30,
+        env={**os.environ, "PSModulePath": str(tmp_path / "intentionally-empty-modules")},
     )
     assert result.returncode == 0, result.stderr + result.stdout
     assert result.stdout.strip() == "ok"

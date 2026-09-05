@@ -145,13 +145,28 @@ def test_job_cannot_silently_run_without_native_ownership():
 def test_native_job_close_kills_assigned_process(tmp_path):
     import subprocess
     job = module("windows_job").WindowsJob()
-    child = subprocess.Popen([sys._base_executable, "-I", "-c", "import time; time.sleep(120)"],
-                             creationflags=subprocess.CREATE_NO_WINDOW)
+    ready = tmp_path / "owned-child-ready.txt"
+    child = subprocess.Popen(
+        [sys._base_executable, "-I", "-B", "-c",
+         "import os,sys,time;from pathlib import Path;"
+         "Path(sys.argv[1]).write_text(str(os.getpid()));time.sleep(120)", str(ready)],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
     try:
         job.assign(child.pid)
+        deadline = time.monotonic() + 10
+        while child.poll() is None and time.monotonic() < deadline:
+            if ready.exists() and ready.read_text() == str(child.pid):
+                break
+            time.sleep(0.02)
+        assert ready.exists(), "controlled child never reached its sleeping state"
+        assert int(ready.read_text()) == child.pid, "must assign the actual interpreter, not a redirector"
+        assert child.poll() is None, "a previously exited process does not prove kill-on-close"
         assert job.active_processes() == 1
         job.close()
-        assert child.wait(timeout=5) != 0
+        child.wait(timeout=5)
+        assert not psutil.pid_exists(child.pid)
     finally:
         job.close()
         if child.poll() is None:
