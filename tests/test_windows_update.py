@@ -71,7 +71,7 @@ def windows_runtime(monkeypatch):
 @pytest.mark.asyncio
 async def test_prepare_uses_candidate_runtime_and_baseline_data_without_start(tmp_path, windows_runtime):
     root, files = installation(tmp_path)
-    candidate = root / ".updates/releases/0.6.0"
+    candidate = root / ".updates/releases/0.6.1"
     for name, payload in files.items():
         put(candidate / name, payload)
     put(candidate / ".litechecker-update-owned", b"litechecker-updater-v1\n")
@@ -132,7 +132,7 @@ async def test_foreign_release_refused_before_any_command(tmp_path, windows_runt
     adapter = windows_runtime.WindowsUpdateAdapter(root, runner=runner, powershell=Path("powershell.exe"))
     with pytest.raises(windows_runtime.WindowsUpdateError):
         await adapter.prepare(outsider)
-    unowned = root / ".updates/releases/0.6.0"
+    unowned = root / ".updates/releases/0.6.1"
     unowned.mkdir(parents=True)
     with pytest.raises(windows_runtime.WindowsUpdateError):
         await adapter.prepare(unowned)
@@ -164,7 +164,7 @@ async def test_real_signed_stopped_update_and_tamper_preserve_private_state(tmp_
     key = Ed25519PrivateKey.generate()
     channel = {"schema": 1, "enabled": True, "public_key": base64.b64encode(key.public_key().public_bytes_raw()).decode(), "manifest_urls": ["https://example.com/release.json"]}
     initialize_channel(root, json.dumps(channel).encode())
-    responses = signed_payload(files, key, "0.6.0", 6)
+    responses = signed_payload(files, key, "0.6.1", 6)
     async def fetch(url, limit):
         assert len(responses[url]) <= limit
         return responses[url]
@@ -172,13 +172,13 @@ async def test_real_signed_stopped_update_and_tamper_preserve_private_state(tmp_
     adapter = windows_runtime.WindowsUpdateAdapter(root, runner=runner, powershell=Path("powershell.exe"))
     result = await check_for_update(root, adapter, force=True, fetcher=fetch)
     assert result["status"] == "updated", result
-    assert result["version"] == "0.6.0"
+    assert result["version"] == "0.6.1"
     assert await adapter.is_running() is False
     assert all("--validate" in args or "Prepare" in args for args, *_ in runner.calls)
     responses = signed_payload(files, Ed25519PrivateKey.generate(), "0.7.0", 7)
     result = await check_for_update(root, adapter, force=True, fetcher=fetch)
     assert result["status"] == "failed"
-    assert result["version"] == "0.6.0"
+    assert result["version"] == "0.6.1"
     assert (root / "windows-state/settings.json").read_bytes() == b"preserve-private-settings"
     assert (root / "windows-state/device.json").read_bytes() == b"preserve-device"
 
@@ -192,7 +192,7 @@ async def test_real_signed_transaction_rolls_back_failed_worker_activation(tmp_p
     initialize_channel(root, json.dumps({"schema": 1, "enabled": True,
         "public_key": base64.b64encode(key.public_key().public_bytes_raw()).decode(),
         "manifest_urls": ["https://example.com/release.json"]}).encode())
-    responses = signed_payload(files, key, "0.6.0", 6)
+    responses = signed_payload(files, key, "0.6.1", 6)
     async def fetch(url, limit):
         return responses[url]
     class Host:
@@ -207,7 +207,7 @@ async def test_real_signed_transaction_rolls_back_failed_worker_activation(tmp_p
     adapter = windows_runtime.WindowsUpdateAdapter(root, host=host, runner=Runner(), powershell=Path("powershell.exe"))
     result = await check_for_update(root, adapter, force=True, fetcher=fetch)
     assert result["status"] == "rolled-back", result
-    assert host.activations == [(root / ".updates/releases/0.6.0", True), (root, True)]
+    assert host.activations == [(root / ".updates/releases/0.6.1", True), (root, True)]
     assert select_release(root) == root
     assert (root / "windows-state/settings.json").read_bytes() == b"preserve-private-settings"
 

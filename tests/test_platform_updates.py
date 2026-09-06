@@ -99,7 +99,7 @@ def install(tmp_path, keys, monkeypatch):
     from litechecker import distribution
     monkeypatch.setattr(distribution, "host_platform", lambda: "macos")
     (tmp_path / "distribution.json").write_bytes(marker("macos"))
-    (tmp_path / "pyproject.toml").write_text('[project]\nversion="0.6.0"\n')
+    (tmp_path / "pyproject.toml").write_text('[project]\nversion="0.6.1"\n')
     updater.initialize_channel(tmp_path, channel(keys[1]))
     return tmp_path, UpdateStore(tmp_path), Adapter(tmp_path, running=False)
 

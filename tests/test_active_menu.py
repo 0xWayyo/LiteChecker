@@ -22,8 +22,8 @@ def candidate_archive(root, version, extra_files=None):
     manifest = json.loads((root / "CONTENTS.sha256.json").read_bytes())
     for name in manifest:
         files[name] = (root / name).read_bytes()
-    files["pyproject.toml"] = files["pyproject.toml"].replace(b'"0.6.0"', json.dumps(version).encode())
-    files["uv.lock"] = files["uv.lock"].replace(b'version = "0.6.0"', ('version = "' + version + '"').encode())
+    files["pyproject.toml"] = files["pyproject.toml"].replace(b'"0.6.1"', json.dumps(version).encode())
+    files["uv.lock"] = files["uv.lock"].replace(b'version = "0.6.1"', ('version = "' + version + '"').encode())
     # Only this visible UI label changes; all dispatch and storage code is real.
     name = "src/litechecker/windows_app.py" if os.name == "nt" else "scripts/control.sh"
     files[name] = files[name].replace(b"header LITECHECKER", ("header MENU-" + version).encode())

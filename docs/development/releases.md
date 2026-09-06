@@ -1,6 +1,6 @@
 # Выпуск трёх платформ LiteChecker
 
-Production 0.6.0 использует один исходный commit, версию `0.6.0`, sequence `8`
+Production 0.6.1 использует один исходный commit, версию `0.6.1`, sequence `9`
 и существующий ключ Ed25519. `scripts/release.py` работает локально, без загрузки
 в GitHub. Старые релизы 0.5.x не изменяются. Для выпуска используются
 `package_platforms.py`, `package_desktop.py` и `release.py`; пользовательские
@@ -42,9 +42,8 @@ Windows проверяет настоящий публичный BAT, полны
 продолжает исполнять baseline до остановки: worker и UI обязаны сохранять этот
 процессный ABI. Горячей замены работающего supervisor нет. Baseline не очищается.
 
-Текущий этап заканчивается передачей локальных candidate ZIP для ручной проверки.
-Feature branch CI разрешён. Main, tag, release, assets и stable channel не меняются
-до нового явного разрешения после проверки пользователем.
+Публикация выполняется только с явного разрешения владельца после проверок.
+До публикации draft его файлы не должны менять stable channel.
 
 ## Одна команда для production
 
@@ -57,9 +56,9 @@ Feature branch CI разрешён. Main, tag, release, assets и stable channel
 
 ```sh
 .venv/bin/python scripts/release.py build-platforms \
-  --version 0.6.0 --sequence 8 --repository 0xWayyo/LiteChecker \
+  --version 0.6.1 --sequence 9 --repository 0xWayyo/LiteChecker \
   --private-key /absolute/path/signing-private.key \
-  --output dist/releases/0.6.0
+  --output dist/releases/0.6.1
 ```
 
 Команда читает явный список публичных файлов один раз, строит три профиля,
@@ -71,11 +70,11 @@ Feature branch CI разрешён. Main, tag, release, assets и stable channel
 
 | Артефакт | Назначение |
 | --- | --- |
-| `LiteChecker-0.6.0-Windows.zip` | Установка Windows: `LiteChecker.bat`, `_app` и инструкция |
-| `LiteChecker-0.6.0-macOS.zip` | Установка macOS: `INSTALL.command`, `_app` и инструкция |
-| `LiteChecker-0.6.0-Linux.zip` | Установка Linux с Docker и тот же подписанный источник обновления |
-| `LiteChecker-0.6.0-windows-update-source.zip` | Технический плоский источник обновления Windows |
-| `LiteChecker-0.6.0-macos-update-source.zip` | Технический плоский источник обновления macOS |
+| `LiteChecker-0.6.1-Windows.zip` | Установка Windows: `LiteChecker.bat`, `_app` и инструкция |
+| `LiteChecker-0.6.1-macOS.zip` | Установка macOS: `INSTALL.command`, `_app` и инструкция |
+| `LiteChecker-0.6.1-Linux.zip` | Установка Linux с Docker и тот же подписанный источник обновления |
+| `LiteChecker-0.6.1-windows-update-source.zip` | Технический плоский источник обновления Windows |
+| `LiteChecker-0.6.1-macos-update-source.zip` | Технический плоский источник обновления macOS |
 | `release-windows.json`, `release-macos.json`, `release-linux.json` | Подписанные метаданные schema 2 каждого target |
 | Пять `*.zip.sha256` | Проверка доставки; не заменяет подпись |
 
@@ -99,11 +98,11 @@ sequence и версией: даже неудавшаяся загрузка а�
 
 ```sh
 .venv/bin/python scripts/package_platforms.py \
-  --version 0.6.0 --repository 0xWayyo/LiteChecker \
+  --version 0.6.1 --repository 0xWayyo/LiteChecker \
   --public-key /absolute/path/signing-public.key --output dist/platform-sources
 .venv/bin/python scripts/release.py build \
-  --platform macos --archive dist/platform-sources/LiteChecker-0.6.0-macos-update-source.zip \
-  --version 0.6.0 --sequence 8 --repository 0xWayyo/LiteChecker \
+  --platform macos --archive dist/platform-sources/LiteChecker-0.6.1-macos-update-source.zip \
+  --version 0.6.1 --sequence 9 --repository 0xWayyo/LiteChecker \
   --private-key /absolute/path/signing-private.key --output dist/macos-signed
 ```
 
@@ -117,7 +116,8 @@ separators=(",", ":"), ensure_ascii=True)`. Архив, marker, версия, к
 
 ## Установка и публикация
 
-Версия 0.6.0 предназначена для новых установок. macOS использует компактный wrapper:
+Версия 0.6.1 подходит для новых установок и подписанного обновления с 0.6.0;
+настройки, ID и существующее доверие сохраняются. macOS использует компактный wrapper:
 `INSTALL.command`, `_app` и инструкция. Внутри `_app` остаётся плоский source,
 установка по-прежнему идёт в `~/Library/Application Support/LiteChecker`.
 Handoff очищает только проверенное содержимое `_app`, оставляя там
@@ -128,6 +128,6 @@ Handoff очищает только проверенное содержимое 
 и доверие. Ручное переформатирование JSON канала не поддерживается установщиком;
 используйте штатное меню. Старую папку не удаляйте и не переносите автоматически.
 
-После всех CI gates автор создаёт draft Release `v0.6.0` из проверенного commit,
+После всех CI gates автор создаёт draft Release `v0.6.1` из проверенного commit,
 загружает все 13 файлов и проверяет имена и SHA-256. Публикация и latest выполняются
 отдельно после проверки; инструменты сборки ничего не публикуют.
