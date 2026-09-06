@@ -13,13 +13,14 @@ from pathlib import Path, PurePosixPath
 import re
 import shutil
 import stat
+import tomllib
 import unicodedata
 import uuid
 import zipfile
 
 from .update_manifest import SHA256_RE, VERSION_RE
 from .atomic_io import atomic_replace
-from . import platform_security
+from . import distribution, platform_security
 
 
 MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
@@ -155,6 +156,8 @@ def validate_source_zip(
     *,
     expected_sha256: str | None = None,
     expected_size: int | None = None,
+    expected_platform: str | None = None,
+    expected_version: str | None = None,
 ) -> ValidatedArchive:
     """Validate a complete signed source archive without writing any files."""
 
@@ -239,6 +242,29 @@ def validate_source_zip(
             raise StoreError("archive member digest mismatch")
         mode = (info_by_name[name].external_attr >> 16) & 0o777
         files.append(ArchiveFile(path=PurePosixPath(name), data=payload, mode=mode))
+    if expected_platform is not None and (
+        type(expected_platform) is not str or expected_platform not in distribution.PLATFORMS
+    ):
+        raise StoreError("expected archive platform is invalid")
+    marker = payloads.get("distribution.json")
+    try:
+        platform = distribution.parse_distribution(marker) if marker is not None else None
+    except distribution.DistributionError as error:
+        raise StoreError("archive distribution marker is invalid") from error
+    if expected_platform is not None and platform != expected_platform:
+        raise StoreError("archive platform does not match metadata")
+    if expected_version is not None:
+        if type(expected_version) is not str or VERSION_RE.fullmatch(expected_version) is None:
+            raise StoreError("expected archive version is invalid")
+        try:
+            project = payloads["pyproject.toml"]
+            if len(project) > 64 * 1024:
+                raise StoreError("archive project size is invalid")
+            version = tomllib.loads(project.decode("utf-8"))["project"]["version"]
+        except (KeyError, TypeError, UnicodeError, tomllib.TOMLDecodeError) as error:
+            raise StoreError("archive project version is invalid") from error
+        if type(version) is not str or version != expected_version:
+            raise StoreError("archive version does not match metadata")
     return ValidatedArchive(files=tuple(files), sha256=digest, size=len(data))
 
 

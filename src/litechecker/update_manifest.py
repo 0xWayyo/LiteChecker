@@ -14,6 +14,8 @@ from urllib.parse import urlsplit
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
+from .distribution import PLATFORMS
+
 
 MAX_METADATA_BYTES = 64 * 1024
 MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
@@ -40,6 +42,7 @@ class ReleaseMetadata:
     published_at: datetime
     artifact: Artifact
     payload: Mapping[str, object]
+    platform: str | None = None
 
 
 @dataclass(frozen=True)
@@ -47,6 +50,7 @@ class ChannelConfig:
     enabled: bool
     public_key: bytes
     manifest_urls: tuple[str, ...]
+    platform: str | None = None
 
 
 def _object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -151,13 +155,15 @@ def verify_release_metadata(data: bytes, public_key: bytes) -> ReleaseMetadata:
         {"schema", "payload", "signature"},
         "envelope",
     )
-    if type(envelope["schema"]) is not int or envelope["schema"] != 1:
+    if type(envelope["schema"]) is not int or envelope["schema"] not in {1, 2}:
         raise ManifestError("envelope schema is unsupported")
+    platform_fields = {"platform"} if envelope["schema"] == 2 else set()
     payload = _exact_dict(
         envelope["payload"],
-        {"version", "sequence", "published_at", "artifact"},
+        {"version", "sequence", "published_at", "artifact"} | platform_fields,
         "payload",
     )
+    platform = _platform(payload["platform"]) if platform_fields else None
     parse_version(payload["version"])
     sequence = payload["sequence"]
     if type(sequence) is not int or sequence < 1:
@@ -201,29 +207,37 @@ def verify_release_metadata(data: bytes, public_key: bytes) -> ReleaseMetadata:
             "size": size,
         },
     }
+    if platform is not None:
+        stable_payload["platform"] = platform
     return ReleaseMetadata(
         version=payload["version"],
         sequence=sequence,
         published_at=published_at,
         artifact=artifact,
         payload=stable_payload,
+        platform=platform,
     )
 
 
 def parse_channel_config(data: bytes) -> ChannelConfig:
     """Strictly parse a locally provisioned update channel."""
 
-    document = _exact_dict(
-        _json(data, limit=MAX_METADATA_BYTES),
-        {"schema", "enabled", "public_key", "manifest_urls"},
-        "channel",
-    )
-    if type(document["schema"]) is not int or document["schema"] != 1:
+    document = _json(data, limit=MAX_METADATA_BYTES)
+    if type(document) is not dict or type(document.get("schema")) is not int or document["schema"] not in {1, 2}:
         raise ManifestError("channel schema is unsupported")
+    platform_fields = {"platform"} if document["schema"] == 2 else set()
+    _exact_dict(document, {"schema", "enabled", "public_key", "manifest_urls"} | platform_fields, "channel")
     if type(document["enabled"]) is not bool:
         raise ManifestError("channel enabled flag is invalid")
     return ChannelConfig(
         enabled=document["enabled"],
         public_key=_decode_b64(document["public_key"], 32, "public key"),
         manifest_urls=_urls(document["manifest_urls"]),
+        platform=_platform(document["platform"]) if platform_fields else None,
     )
+
+
+def _platform(value: Any) -> str:
+    if type(value) is not str or value not in PLATFORMS:
+        raise ManifestError("platform is invalid")
+    return value

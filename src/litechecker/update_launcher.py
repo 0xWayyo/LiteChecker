@@ -11,8 +11,9 @@ import stat
 import sys
 
 if __package__:
-    from . import platform_security
+    from . import distribution, platform_security
 else:  # The stable POSIX entry also executes this file directly.
+    import distribution
     import platform_security
 
 
@@ -93,6 +94,22 @@ def read_bytes(root: Path, path: Path, maximum=65536) -> bytes:
 
 def select_release(root: Path) -> Path:
     root = checked_path(Path(root), Path(root))
+    try:
+        platform = distribution.read_distribution(root)
+        if platform is not None and platform != distribution.host_platform():
+            raise LauncherError()
+        channel_path = checked_path(root, root / ".updates/channel.json")
+        if not channel_path.exists():
+            channel_path = checked_path(root, root / "update-channel.json")
+        if channel_path.exists():
+            channel = read_json(root, channel_path)
+            if platform is not None:
+                if type(channel.get("schema")) is not int or channel["schema"] != 2 or channel.get("platform") != platform:
+                    raise LauncherError()
+            elif channel.get("schema") == 2 or "platform" in channel:
+                raise LauncherError()
+    except (OSError, ValueError):
+        raise LauncherError() from None
     state = checked_path(root, root / ".updates/install.json")
     if not state.exists():
         return root
@@ -111,6 +128,11 @@ def select_release(root: Path) -> Path:
         return root
     if read_bytes(root, marker, 64) != b"litechecker-updater-v1\n" or re.fullmatch(rb"[a-f0-9]{64}\n?", read_bytes(root, digest, 65)) is None:
         raise LauncherError()
+    try:
+        if distribution.read_distribution(release) != platform:
+            raise LauncherError()
+    except (OSError, ValueError):
+        raise LauncherError() from None
     return release
 
 

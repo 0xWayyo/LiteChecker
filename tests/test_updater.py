@@ -22,7 +22,7 @@ def _module():
 
 def _archive(version):
     files = {
-        "pyproject.toml": f'version = "{version}"\n'.encode(),
+        "pyproject.toml": f'[project]\nversion = "{version}"\n'.encode(),
         "src/litechecker/__init__.py": b'"release"\n',
     }
     manifest = {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}

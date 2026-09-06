@@ -27,7 +27,7 @@ from .update_manifest import (
     verify_release_metadata,
 )
 from .update_store import StoreError, UpdateStore, validate_source_zip
-from . import platform_security
+from . import distribution, platform_security
 
 
 CHECK_INTERVAL = timedelta(hours=1)
@@ -114,18 +114,34 @@ def _read_file_bounded(path: Path, limit: int) -> bytes:
 
 def _load_channel(store: UpdateStore) -> ChannelConfig | None:
     store._validate_root()
-    if not store.channel_path.exists():
+    platform = distribution.read_distribution(store.root)
+    if platform is not None and platform != distribution.host_platform():
+        raise ManifestError("distribution platform does not match host")
+    if not store.channel_path.exists() and not store.channel_path.is_symlink():
         return None
-    return parse_channel_config(_read_file_bounded(store.channel_path, MAX_METADATA_BYTES))
+    config = parse_channel_config(_read_file_bounded(store.channel_path, MAX_METADATA_BYTES))
+    _validate_channel_target(config, store.root)
+    return config
+
+
+def _validate_channel_target(config: ChannelConfig, root: Path) -> None:
+    platform = distribution.read_distribution(root)
+    if config.platform != platform:
+        raise ManifestError("channel platform does not match baseline distribution")
+    if platform is not None and platform != distribution.host_platform():
+        raise ManifestError("distribution platform does not match host")
 
 
 def _channel_document(config: ChannelConfig, *, enabled: bool | None = None) -> dict:
-    return {
-        "schema": 1,
+    document = {
+        "schema": 2 if config.platform is not None else 1,
         "enabled": config.enabled if enabled is None else enabled,
         "public_key": base64.b64encode(config.public_key).decode("ascii"),
         "manifest_urls": list(config.manifest_urls),
     }
+    if config.platform is not None:
+        document["platform"] = config.platform
+    return document
 
 
 def initialize_channel(root: Path, data: bytes) -> bool:
@@ -134,11 +150,11 @@ def initialize_channel(root: Path, data: bytes) -> bool:
     config = parse_channel_config(data)
     store = UpdateStore(Path(root))
     store._validate_root()
+    _validate_channel_target(config, store.root)
     if store.channel_path.exists() or store.channel_path.is_symlink():
         if store.channel_path.is_symlink() or not store.channel_path.is_file():
             raise StoreError("installed channel path is unsafe")
-        if platform_security.is_windows():
-            platform_security.assert_private_file(store.channel_path)
+        _load_channel(store)
         return False
     store.ensure_layout()
     payload = (
@@ -148,6 +164,7 @@ def initialize_channel(root: Path, data: bytes) -> bool:
     try:
         descriptor = os.open(store.channel_path, flags, 0o600)
     except FileExistsError:
+        _load_channel(store)
         return False
     with os.fdopen(descriptor, "wb") as output:
         if not platform_security.is_windows():
@@ -333,9 +350,10 @@ def _write_outcome(store: UpdateStore, state: dict, status: str, error: str | No
 
 
 def _release_path(store: UpdateStore, adapter: UpdateAdapter, version: str | None) -> Path:
-    if version is None:
-        return Path(adapter.baseline)
-    return store.releases / version
+    release = Path(adapter.baseline) if version is None else store.releases / version
+    if distribution.read_distribution(release) != distribution.read_distribution(store.root):
+        raise StoreError("selected release platform does not match baseline distribution")
+    return release
 
 
 def _baseline_version(store: UpdateStore, adapter: UpdateAdapter) -> tuple[int, int, int]:
@@ -482,7 +500,11 @@ async def check_for_update(
         for url in channel.manifest_urls:
             try:
                 metadata = await _bounded_fetch(selected, url, MAX_METADATA_BYTES, download_deadline)
-                release = verify_release_metadata(metadata, channel.public_key)
+                authenticated = verify_release_metadata(metadata, channel.public_key)
+                _validate_channel_target(channel, store.root)
+                if authenticated.platform != channel.platform:
+                    raise ManifestError("signed release platform does not match channel")
+                release = authenticated
                 break
             except Exception:
                 continue
@@ -533,6 +555,8 @@ async def check_for_update(
                     archive,
                     expected_sha256=digest,
                     expected_size=release.artifact.size,
+                    expected_platform=release.platform,
+                    expected_version=release.version,
                 )
                 break
             except Exception:
@@ -570,6 +594,7 @@ async def check_for_update(
             store.remove_release(release.version)
             return _closed("failed", state, error="recovery journal could not be persisted")
 
+        old_release = _release_path(store, adapter, state["pending"]["from_version"])
         maintenance = await _maintenance_lock(
             Path(adapter.maintenance_lock),
             store.root,
@@ -581,7 +606,6 @@ async def check_for_update(
             store.remove_release(release.version)
             return _closed("busy", state, error=state["error"])
 
-        old_release = _release_path(store, adapter, state["pending"]["from_version"])
         committed = False
         rollback_ok = False
         permanent_release_failure = True
