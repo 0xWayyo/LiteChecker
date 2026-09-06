@@ -59,6 +59,12 @@ def _write_new_files(outputs: dict[Path, tuple[bytes, int]]) -> None:
     for path in selected:
         if path.exists() or not path.parent.is_dir():
             raise ReleaseError("output-exists-or-parent-missing")
+    fchmod = getattr(os, "fchmod", None)
+    if fchmod is None and any(mode != 0o644 for _, mode in selected.values()):
+        # Windows public artifacts need no POSIX permission promise. Private
+        # key outputs do: chmod(0600) is not a substitute for a private NTFS ACL.
+        # Reject the entire batch before even staging public-first outputs.
+        raise ReleaseError("private-output-permissions-unavailable")
     staged: list[tuple[Path, Path]] = []
     published: list[tuple[Path, int, int]] = []
     try:
@@ -67,7 +73,8 @@ def _write_new_files(outputs: dict[Path, tuple[bytes, int]]) -> None:
             temporary = Path(temporary_name)
             staged.append((temporary, destination))
             with os.fdopen(descriptor, "wb") as stream:
-                os.fchmod(stream.fileno(), mode)
+                if fchmod is not None:
+                    fchmod(stream.fileno(), mode)
                 stream.write(payload)
                 stream.flush()
                 os.fsync(stream.fileno())
