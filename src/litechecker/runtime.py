@@ -4,11 +4,34 @@ from __future__ import annotations
 
 import asyncio
 import signal
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Iterable
 from typing import TypeVar
 
 
 _T = TypeVar("_T")
+
+
+async def join_owned_tasks(tasks: Iterable[asyncio.Task], *, cancel: bool = False) -> None:
+    """Finish owned cleanup even under repeated parent cancellation.
+
+    Do not cancel an already cancelling child again: it may be closing/reaping
+    resources in its finally block. Cancellation remains authoritative only
+    after every child is joined. Exceptions are retrieved by the owner separately.
+    """
+    tasks = tuple(tasks)
+    if cancel:
+        for task in tasks:
+            if not task.done() and not task.cancelling():
+                task.cancel()
+    joined = asyncio.gather(*tasks, return_exceptions=True)
+    cancelled = False
+    while not joined.done():
+        try:
+            await asyncio.shield(joined)
+        except asyncio.CancelledError:
+            cancelled = True
+    if cancelled:
+        raise asyncio.CancelledError
 
 
 async def run_with_signals(command: Awaitable[_T]) -> _T:

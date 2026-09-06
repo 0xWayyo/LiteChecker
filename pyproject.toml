@@ -1,6 +1,6 @@
 [project]
 name = "litechecker"
-version = "0.6.1"
+version = "0.6.2"
 description = "Multi-city VLESS/REALITY availability monitor"
 requires-python = ">=3.12"
 dependencies = [

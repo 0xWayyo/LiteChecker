@@ -79,11 +79,11 @@ def platform_smoke(output: Path) -> int:
     import package_platforms
     import package_desktop
     key = Ed25519PrivateKey.generate().public_key().public_bytes_raw()
-    paths = package_platforms.build_sources(output / "archives", version="0.6.1",
+    paths = package_platforms.build_sources(output / "archives", version="0.6.2",
         public_key=key, repository="example/LiteChecker")
     snapshots = {}
     for platform, path in paths.items():
-        validated = validate_source_zip(path.read_bytes(), expected_platform=platform, expected_version="0.6.1")
+        validated = validate_source_zip(path.read_bytes(), expected_platform=platform, expected_version="0.6.2")
         snapshots[platform] = {str(item.path): item.data for item in validated.files}
     for module in package_platforms.COMMON_MODULES:
         name = "src/litechecker/" + module
@@ -93,7 +93,7 @@ def platform_smoke(output: Path) -> int:
     source = paths[platform]
     if platform in {"windows", "macos"}:
         label = "Windows" if platform == "windows" else "macOS"
-        source = output / f"archives/LiteChecker-0.6.1-{label}.zip"
+        source = output / f"archives/LiteChecker-0.6.2-{label}.zip"
         package_desktop.build_package(paths[platform], source, platform=platform)
     with zipfile.ZipFile(source) as archive:
         archive.extractall(output / "public")

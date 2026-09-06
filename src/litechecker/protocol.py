@@ -69,8 +69,11 @@ class CollectorClient:
         self._jitter = jitter or (lambda: random.uniform(0.1, 0.3))
 
     async def send(self, report: AgentReport) -> DeliveryResult:
+        document = report.model_dump(mode="json")
+        if document.get("app_version") is None:
+            document.pop("app_version", None)
         payload = json.dumps(
-            report.model_dump(mode="json"),
+            document,
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=True,

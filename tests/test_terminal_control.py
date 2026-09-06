@@ -76,6 +76,25 @@ def test_reopening_and_exiting_never_reinstalls_or_starts(installation):
     assert 'never-print-this-secret' not in result.stdout + result.stderr
 
 
+def test_menu_displays_its_release_version_not_baseline_metadata(installation):
+    source, root, _ = installation
+    (source / 'pyproject.toml').write_text('[project]\nname = "litechecker"\nversion = "0.7.2"\n')
+    (root / 'pyproject.toml').write_text('[project]\nname = "litechecker"\nversion = "0.6.0"\n')
+    result = run_menu(installation, inputs='0\n')
+    assert result.returncode == 0, result.stderr
+    assert 'LITECHECKER · v0.7.2' in result.stdout
+    assert 'v0.6.0' not in result.stdout
+
+
+@pytest.mark.parametrize('status', ['updated', 'current'])
+def test_update_result_names_version_returned_by_updater(installation, status):
+    script = installation[1] / 'scripts/update.sh'
+    script.write_text('#!/bin/bash\nprintf \'{"status":"' + status + '\", "version":"0.7.2"}\\n\'\n')
+    result = run_menu(installation, 'update')
+    assert result.returncode == 0, result.stderr
+    assert '0.7.2' in result.stdout
+
+
 @pytest.mark.parametrize('action', ['start', 'stop'])
 def test_actions_use_canonical_managed_launcher_not_extracted_code(installation, action):
     result = run_menu(installation, action)
@@ -216,7 +235,7 @@ def test_manual_update_uses_signed_updater_and_forces_fresh_check(installation):
     result = run_menu(installation, 'update')
     assert result.returncode == 0, result.stderr
     assert calls(installation) == ['update:check --force']
-    assert 'Новая версия установлена' in result.stdout
+    assert 'Новая версия 0.4.0 установлена' in result.stdout
     assert '{"status"' not in result.stdout
 
 

@@ -182,10 +182,13 @@ updates() {
 }
 
 update_result() {
-    local compact=${1//[[:space:]]/}
+    local compact=${1//[[:space:]]/} installed_version=''
+    if [[ "$compact" =~ \"version\":\"([0-9]+\.[0-9]+\.[0-9]+)\" && ${#BASH_REMATCH[1]} -le 32 ]]; then
+        installed_version=" ${BASH_REMATCH[1]}"
+    fi
     case "$compact" in
-        *'"status":"updated"'*) printf '%s\n' 'Новая версия установлена. Настройки сохранены.';;
-        *'"status":"current"'*) printf '%s\n' 'Установлена актуальная версия.';;
+        *'"status":"updated"'*) printf 'Новая версия%s установлена. Настройки сохранены.\n' "$installed_version";;
+        *'"status":"current"'*) printf 'Установлена актуальная версия%s.\n' "$installed_version";;
         *'"status":"disabled"'*) printf '%s\n' 'Канал обновлений отключён. Включите его командой: bash scripts/update.sh enable';;
         *'"status":"unconfigured"'*) printf '%s\n' 'Канал обновлений не настроен. Установите свежий пакет с GitHub.';;
         *'"status":"busy"'*) printf '%s\n' 'Другая проверка обновлений или сохранение настроек ещё выполняется. Повторите позже.';;
@@ -272,7 +275,7 @@ frame_row() {
 clear_view() { if $screen; then printf '\033[H\033[2J'; else printf '\n'; fi; }
 
 header() {
-    local title=$1 columns=${COLUMNS:-80} geometry left right rule
+    local title="$1${2:-}" columns=${COLUMNS:-80} geometry left right rule
     if $interactive; then
         geometry=$(stty size 2>/dev/null) || geometry=''
         [[ "$geometry" =~ ^[0-9]+[[:space:]]+([0-9]+)$ ]] && columns=${BASH_REMATCH[1]}
@@ -288,6 +291,27 @@ header() {
     printf '  ┌%s┐\n  │%*s%s%s%s%*s│\n  ├%s┤\n' "$rule" "$left" '' "$bold" "$title" "$reset" "$right" '' "$rule"
 }
 
+menu_version() {
+    # This script is pinned to its source release by the managed launcher.
+    # Source profiles always include pyproject, including before Python setup.
+    local value=''
+    if regular "$source_root/pyproject.toml"; then
+        value=$(head -c 65536 "$source_root/pyproject.toml" | awk '
+            { sub(/\r$/, "") }
+            /^\[/ { project = ($0 == "[project]") }
+            project && /^version[[:space:]]*=/ {
+                sub(/^version[[:space:]]*=[[:space:]]*"/, "")
+                sub(/"[[:space:]]*$/, "")
+                print; exit
+            }')
+    fi
+    if [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && ${#value} -le 32 ]]; then
+        printf ' · v%s' "$value"
+    else
+        printf ' · v?'
+    fi
+}
+
 menu_view() {
     local icon label hint
     primary=refresh
@@ -300,7 +324,7 @@ menu_view() {
         *) icon=❔; label='СТАТУС НЕИЗВЕСТЕН'; hint='Откройте последние события'; primary_label='Обновить статус';;
     esac
     clear_view
-    header LITECHECKER
+    header LITECHECKER "$(menu_version)"
     frame_row "$icon $label" 1
     frame_row "$hint"
     local rule

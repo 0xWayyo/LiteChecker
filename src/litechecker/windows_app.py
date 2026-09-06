@@ -238,6 +238,8 @@ def run_menu(
                         else "Мониторинг уже работает" if result.get("status") == "already-running"
                         else "Не получилось запустить мониторинг"
                     )
+                if result.get("autostart") is False:
+                    output_fn("Не удалось изменить автозапуск Windows. Выбранное состояние сохранено; проверьте разрешения системы.")
             except Exception:
                 output_fn("Не получилось выполнить действие. Попробуйте снова")
         elif choice == "2":
@@ -269,6 +271,24 @@ def main(argv=None) -> int:
         ensure_update_channel(args.root.absolute())
         if not ensure_initial_settings(args.root.absolute()):
             return 0
+        from litechecker.windows_autostart import requested
+        from litechecker.windows_control import start, status
+        root = args.root.absolute()
+        try:
+            should_resume = requested(root)
+        except Exception:
+            emit("Не удалось прочитать состояние автозапуска. Выберите «Запустить» или «Остановить» в меню.")
+            return run_menu(root)
+        if should_resume:
+            emit("Возобновляем проверки после предыдущего запуска…")
+            result = _run(start(root, resume=True))
+            if result.get("status") not in {"started", "starting", "already-running", "stopped", "stopping"}:
+                emit("Не получилось возобновить проверки. Используйте «Запустить» в меню.")
+        elif not (root / "windows-state/control/desired-running.json").exists() and status(root).get("state") in {"running", "starting"}:
+            # Adopt an already running pre-autostart installation, never a stale PID.
+            result = _run(start(root, resume=True, adopt=True))
+            if result.get("autostart") is False:
+                emit("Проверки работают, но настроить автозапуск Windows не удалось.")
         return run_menu(args.root.absolute())
     except Exception:
         print("Не получилось открыть LiteChecker. Проверьте папку и настройки")

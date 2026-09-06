@@ -26,7 +26,7 @@ def load_script(name):
 
 def source_package(tmp_path):
     return load_script("package_platforms.py").build_sources(
-        tmp_path / "source", version="0.6.1", repository="example/LiteChecker",
+        tmp_path / "source", version="0.6.2", repository="example/LiteChecker",
         public_key=Ed25519PrivateKey.generate().public_key().public_bytes_raw(),
     )["windows"]
 

@@ -32,6 +32,7 @@ from litechecker.models import (
 )
 from litechecker.probe import ControlResult, check_control, probe_all
 from litechecker.recheck import confirm_failures
+from litechecker.app_version import running_version
 from litechecker.state import (
     SequenceStore,
     SnapshotStore,
@@ -352,6 +353,7 @@ async def measure_cycle(
         run_reason=run_reason,
         duration_ms=duration_ms,
         xray_version=xray_info.version,
+        app_version=running_version(),
     )
     if dependencies.attempts_path is not None:
         try:

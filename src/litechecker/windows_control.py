@@ -75,28 +75,42 @@ async def _spawn_supervisor(root, instance):
                             creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP)
 
 
-async def start(root: Path) -> dict:
+async def start(root: Path, *, resume: bool = False, adopt: bool = False) -> dict:
+    from litechecker.windows_autostart import remember, requested, reserve_start
+
     try:
         root = _ensure_control(root)
         lock = FileLock(control_path(root, "start.lock"), timeout=0, mode=0o600, preserve_lock_file=True)
         with lock:
             observed = status(root)
-            if observed["state"] in {"running", "starting"}:
-                return {"status": "already-running", **observed}
+            autostart = True
+            if resume and adopt and observed["state"] in {"running", "starting"}:
+                autostart = remember(root, True, only_if_missing=True) is not False
+            if resume and not requested(root):
+                return {"status": "stopped", **status(root)}
             if observed["state"] == "unknown":
                 return {"status": "failed", **observed}
+            if not resume:
+                autostart = remember(root, True)
+            if observed["state"] in {"running", "starting"}:
+                return {"status": "already-running", "autostart": autostart, **observed}
             instance = secrets.token_hex(16)
+            if not reserve_start(root, instance):
+                return {"status": "stopped", **status(root)}
             process = await _spawn_supervisor(root, instance)
             deadline = time.monotonic() + _START_TIMEOUT
             while time.monotonic() < deadline:
                 observed = status(root)
                 record = read_record(root, "supervisor.json")
+                if record and record.get("instance") == instance and not requested(root):
+                    write_record(root, "supervisor-stop.json", {"instance": instance})
+                    return {"status": "stopping", **observed}
                 if record and record.get("instance") == instance and observed["state"] == "running":
-                    return {"status": "started", **observed}
+                    return {"status": "started", "autostart": autostart, **observed}
                 if process.poll() is not None:
                     return {"status": "failed", **observed, "error": "supervisor-start-failed"}
                 await asyncio.sleep(0.1)
-            return {"status": "starting", **observed}
+            return {"status": "starting", "autostart": autostart, **observed}
     except Timeout:
         observed = status(root)
         return {"status": "already-running" if observed["state"] in {"running", "starting"} else "busy", **observed}
@@ -105,11 +119,14 @@ async def start(root: Path) -> dict:
 
 
 async def stop(root: Path) -> dict:
+    from litechecker.windows_autostart import remember
+
     try:
         root = safe_root(root)
+        autostart = remember(root, False)
         observed = status(root)
         if observed["state"] == "stopped":
-            return {"status": "stopped", **observed}
+            return {"status": "stopped", "autostart": autostart, **observed}
         record = read_record(root, "supervisor.json")
         if not record or not _process_matches(root, record, "supervisor"):
             return {"status": "failed", **observed, "error": "process-identity-mismatch"}
@@ -117,11 +134,11 @@ async def stop(root: Path) -> dict:
         deadline = time.monotonic() + _STOP_TIMEOUT
         while time.monotonic() < deadline:
             if not _process_matches(root, record, "supervisor"):
-                return {"status": "stopped", **status(root)}
+                return {"status": "stopped", "autostart": autostart, **status(root)}
             await asyncio.sleep(0.1)
         # A signed update may still be completing its bounded transaction.
         # Never call this stopped and never force-kill an updating supervisor.
-        return {"status": "stopping", **status(root)}
+        return {"status": "stopping", "autostart": autostart, **status(root)}
     except Exception:
         return {"status": "failed", "error": "supervisor-stop-failed", **status(root)}
 

@@ -66,6 +66,17 @@ async def windows_cycle(settings):
 async def run_worker(root: Path, release: Path, instance: str):
     root, release = safe_root(root), release_path(root, release)
     gate = await wait_for_gate(root, instance)
+    stop = read_record(root, "supervisor-stop.json")
+    if stop and stop.get("instance") == gate.get("supervisor_instance"):
+        # A retained pre-autostart supervisor can publish late after Stop.
+        # Its new worker must not start a measurement while it catches up.
+        return
+    if read_record(root, "desired-running.json") is not None:
+        from litechecker.windows_autostart import requested
+        if not requested(root):
+            # More than one very late baseline launch may exist. Stop applies
+            # to all of them, not only the most recently reserved nonce.
+            return
     validate(root, release)
     settings = load_settings(root, str(release / ".windows-native/tools/xray/xray.exe"))
     record = process_record(root, release, "worker", instance,

@@ -206,9 +206,9 @@ async def test_once_sends_actual_cycle_to_telegram_and_records_only_telegram_ack
     assert delivered[0]["chat_id"] == "-1000000000000"
     assert delivered[0]["message_thread_id"] == 17
     assert "Тбилиси" in delivered[0]["text"]
-    assert "Домашний Mac (device-aabbccdd)" in delivered[0]["text"]
-    assert "VPN: 2 (IP: 1 / домены: 1)" in delivered[0]["text"]
-    assert "SNI: 1" in delivered[0]["text"]
+    assert "Домашний Mac" in delivered[0]["text"]
+    assert "ID: device-aabbccdd · v" in delivered[0]["text"]
+    assert "Всё доступно · VPN 2/2 · SNI 1/1" in delivered[0]["text"]
     assert TOKEN not in delivered[0]["text"]
     assert _db(settings).storage_stats()["completed_notifications"] == 1
     assert dependencies.pending_store.load() is None
@@ -461,7 +461,8 @@ async def test_network_refreshes_each_probe_cycle_without_changing_device_or_cit
     assert len(messages) == 3
     assert "Домашний Mac · сеть по IP: First Network" in messages[0]
     assert "Домашний Mac · сеть по IP: Second Network" in messages[1]
-    assert "Домашний Mac (device-aabbccdd)" in messages[2]
+    assert "Домашний Mac" in messages[2]
+    assert "ID: device-aabbccdd · v" in messages[2]
     assert "сеть по IP:" not in messages[2]
     assert all("Тбилиси" in message and "device-aabbccdd" in message for message in messages)
     assert all("Yerevan" not in message and "Berlin" not in message for message in messages)
@@ -498,7 +499,8 @@ async def test_manual_name_default_does_not_lookup_network(tmp_path):
         network_lookup=lookup,
     )
     assert calls == []
-    assert "Домашний Mac (device-aabbccdd)" in messages[0]
+    assert "Домашний Mac" in messages[0]
+    assert "ID: device-aabbccdd · v" in messages[0]
     assert "Unrequested Network" not in messages[0]
 
 
@@ -608,5 +610,6 @@ async def test_auto_city_works_with_manual_device_name(tmp_path):
     )
     assert calls == [True]
     assert "Yerevan, AM (по IP)" in messages[0]
-    assert "Домашний Mac (device-aabbccdd)" in messages[0]
+    assert "Домашний Mac" in messages[0]
+    assert "ID: device-aabbccdd · v" in messages[0]
     assert "сеть по IP:" not in messages[0]

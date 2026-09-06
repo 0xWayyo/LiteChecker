@@ -10,6 +10,7 @@ import sys
 from dataclasses import dataclass
 
 from litechecker.direct_network import DirectNetworkUnavailable, TCPDirectNetwork, _numeric
+from litechecker.runtime import join_owned_tasks
 
 
 async def _run(*args: str) -> str:
@@ -33,7 +34,7 @@ async def _run(*args: str) -> str:
                 process.kill()
             except ProcessLookupError:
                 pass
-            await process.wait()
+            await join_owned_tasks((asyncio.create_task(process.wait()),))
 
 
 @dataclass(frozen=True)
@@ -88,6 +89,19 @@ class MacDirectNetwork(TCPDirectNetwork):
         direct = cls(interface, index, sources, servers)
         direct._validate_interface()
         return direct
+
+    async def validate_snapshot(self) -> None:
+        """Re-read physical attachment data; en0/index alone survives Wi-Fi switches.
+
+        This detects observable adapter/address/DNS changes, not every possible
+        upstream change which leaves all local configuration identical.
+        """
+        current = await type(self).discover()
+        if (current.interface != self.interface
+                or current.interface_index != self.interface_index
+                or current.source_addresses != self.source_addresses
+                or current.dns_servers != self.dns_servers):
+            raise DirectNetworkUnavailable("interface_changed")
 
     def _validate_interface(self) -> None:
         try:

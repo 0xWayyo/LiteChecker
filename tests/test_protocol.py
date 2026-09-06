@@ -1,4 +1,5 @@
 from collections.abc import Iterable
+import json
 from datetime import UTC, datetime
 
 import httpx
@@ -90,6 +91,19 @@ async def test_collector_client_accepts_duplicate_without_retry(report):
     assert result.duplicate is True
     assert result.attempts == 1
     assert len(transport.requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("version", [None, "0.7.2"])
+async def test_collector_preserves_producer_version_and_omits_absent_legacy_field(report, version):
+    transport = RecordingTransport([httpx.Response(202)])
+    report = report.model_copy(update={"app_version": version})
+    await CollectorClient("https://collector.example", AGENT_TOKEN, transport=transport).send(report)
+    payload = json.loads(transport.requests[0].content)
+    if version is None:
+        assert "app_version" not in payload
+    else:
+        assert payload["app_version"] == "0.7.2"
 
 
 @pytest.mark.asyncio

@@ -118,6 +118,40 @@ def _process_exists(pid: int) -> bool:
 
 
 @pytest.mark.asyncio
+async def test_cancellation_during_natural_xray_shutdown_still_kills_and_reaps(target, fake_xray, monkeypatch):
+    """A network watcher can cancel a successful probe while it is already closing Xray."""
+    monkeypatch.setenv("FAKE_XRAY_MODE", "ignore-term")
+    stopping = asyncio.Event()
+    owned = []
+    original = probe_module._stop_process
+    async def traced(process, timeout):
+        owned.append(process)
+        stopping.set()
+        await original(process, timeout)
+    monkeypatch.setattr(probe_module, "_stop_process", traced)
+    async def operation():
+        async with XrayProcess(fake_xray.executable, startup_timeout=1, shutdown_timeout=0.05).open(target):
+            pass
+    task = asyncio.create_task(operation())
+    try:
+        async with asyncio.timeout(2):
+            await stopping.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert owned[0].returncode is not None, "natural finalizer was interrupted before kill/reap"
+        assert not _process_exists(owned[0].pid)
+    finally:
+        # Only the child created by this fixture, never a PID from user state.
+        for process in owned:
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_xray_startup_deadline_rejects_a_child_without_listener(
     target, fake_xray, monkeypatch
 ):

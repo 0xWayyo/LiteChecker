@@ -57,12 +57,12 @@ def test_report_is_compact_russian_and_shows_only_failures():
     )
 
     assert rendered.startswith("⚠️ LiteChecker · Tbilisi\n")
-    assert "Home ISP (agent-1)" in rendered
-    assert "2026-09-04 12:00:00 UTC" in rendered
+    assert "Home ISP" in rendered and "ID: agent-1 · v?" in rendered
+    assert "04.09.2026 12:00:00 UTC" in rendered
     assert "(STALE): проверен сохранённый список, возраст 10 мин" in rendered
     assert "VPN: 3 (IP: 0 / домены: 3) · доступны: 1, недоступны: 1, не проверены: 1" in rendered
     assert "Агент снова на связи" in rendered
-    assert "Подписка: добавлено: 1, удалено: 1, изменено: 1." in rendered
+    assert "Подписка: +1 · −1 · изменено: 1" in rendered
     assert rendered.index("🔴 Failure") < rendered.index("❔ Unknown")
     assert "Success" not in rendered
     assert "node-3.example" not in rendered
@@ -204,9 +204,8 @@ def _healthy_report() -> AgentReport:
 def test_all_healthy_is_short_and_counts_vpn_ip_domains_and_sni():
     rendered = format_report(_healthy_report(), AGENT, received_at=NOW)
 
-    assert rendered.startswith("✅ LiteChecker · Tbilisi\nВсё доступно.\n")
-    assert "VPN: 2 (IP: 1 / домены: 1)" in rendered
-    assert "SNI: 1" in rendered
+    assert rendered.startswith("✅ LiteChecker · Tbilisi\nHome ISP · ")
+    assert "Всё доступно · VPN 2/2 · SNI 1/1" in rendered
     assert len(rendered) < 220
     assert "Hidden" not in rendered
     assert "Подписка:" not in rendered
@@ -236,7 +235,7 @@ def test_delayed_healthy_report_states_observation_time_and_is_not_current_all_g
         _healthy_report(), AGENT, received_at=NOW + timedelta(minutes=20)
     )
 
-    assert "2026-09-04 12:00:00 UTC" in rendered
+    assert "04.09.2026 12:00:00 UTC" in rendered
     assert "с задержкой 20 мин" in rendered
     assert "это состояние на время проверки" in rendered
     assert "Всё доступно" not in rendered
@@ -254,8 +253,8 @@ def test_failed_vpn_explains_timeout_and_does_not_present_tcp_latency_as_vpn_spe
     rendered = format_report(report, AGENT, received_at=NOW)
 
     assert "🔴 🇳🇱 Амстердам #2 · node-1.example:443" in rendered
-    assert "Порт отвечает, но VPN-проверка не прошла: истекло время ожидания." in rendered
-    assert "TCP: порт не ответил за время ожидания." in rendered
+    assert "Порт отвечает, VPN: таймаут" in rendered
+    assert "TCP: таймаут" in rendered
     assert "71 мс" not in rendered
     assert "Vless" not in rendered
     assert "Автоматический выбор" not in rendered
@@ -273,17 +272,17 @@ def test_failed_sni_is_separate_from_healthy_vpn_and_explains_certificate_error(
 
     assert "VPN: 1 (IP: 0 / домены: 1) · доступны: 1" in rendered
     assert "SNI: 1 · недоступны: 1" in rendered
-    assert "SNI — доступность доменов напрямую" in rendered
-    assert "TLS: сертификат домена не прошёл проверку." in rendered
+    assert "SNI — проблемы:" in rendered
+    assert "TLS: сертификат не прошёл проверку" in rendered
     assert "сам по себе не означает" not in rendered
-    assert rendered.endswith("TLS: сертификат домена не прошёл проверку.")
+    assert "TLS: сертификат не прошёл проверку\n\nID: agent-1 · v?" in rendered
     assert "Healthy VPN" not in rendered
 
 
 @pytest.mark.parametrize("stage,error_code,explanation", [
-    (ProbeStage.DNS, "dns-failed", "DNS: не удалось получить IP-адрес домена."),
-    (ProbeStage.TCP, "tcp-refused", "TCP: сервер отклонил подключение к порту."),
-    (ProbeStage.TLS_HANDSHAKE, "tls-timeout", "истекло время ожидания TLS-соединения"),
+    (ProbeStage.DNS, "dns-failed", "DNS: IP-адрес не получен"),
+    (ProbeStage.TCP, "tcp-refused", "TCP: подключение отклонено"),
+    (ProbeStage.TLS_HANDSHAKE, "tls-timeout", "Порт отвечает, TLS: таймаут"),
 ])
 def test_domain_diagnostic_failure_has_human_explanation(stage, error_code, explanation):
     result = _result(1, ResultStatus.DOWN, stage, "SNI", check_kind="sni").model_copy(
@@ -295,10 +294,10 @@ def test_domain_diagnostic_failure_has_human_explanation(stage, error_code, expl
 
 
 @pytest.mark.parametrize("error_code,explanation", [
-    ("tls-local-error", "локальная ошибка TLS на агенте"),
-    ("probe-error", "локальная ошибка проверки на агенте"),
-    ("dns-answer-limit", "число IP в ответе DNS превышает допустимый лимит"),
-    ("forbidden-address", "адрес не является разрешённым публичным IP"),
+    ("tls-local-error", "локальная ошибка TLS"),
+    ("probe-error", "локальная ошибка проверки"),
+    ("dns-answer-limit", "слишком много IP в ответе DNS"),
+    ("forbidden-address", "IP не разрешён для проверки"),
 ])
 def test_unknown_policy_result_preserves_specific_reason(error_code, explanation):
     result = _result(1, ResultStatus.UNKNOWN, ProbeStage.POLICY, "SNI", check_kind="sni").model_copy(

@@ -84,6 +84,8 @@ jobs:
           tests/test_windows_doh_preflight.py tests/test_windows_control.py
           tests/test_windows_child_process.py
           tests/test_windows_app.py tests/test_windows_app_entry.py
+          tests/test_windows_autostart.py tests/test_app_version.py
+          tests/test_compact_reports.py tests/test_direct_production_reporting.py
           tests/test_windows_setup_flow.py
           tests/test_active_menu.py tests/test_packaged_smoke.py
           tests/test_release_artifact_writer.py

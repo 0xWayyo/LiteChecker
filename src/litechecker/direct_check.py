@@ -10,7 +10,7 @@ import json
 import os
 import ssl
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -18,11 +18,13 @@ import httpx
 from filelock import AsyncFileLock
 
 from litechecker.measurement import SubscriptionFetcher, make_measurement_dependencies, measure_cycle
-from litechecker.collector.reporting import _result_line, chunk_message
+from litechecker.collector.reporting import _result_line, chunk_message, report_identity
+from litechecker.app_version import running_version
 from litechecker.collector.telegram import TelegramClient, telegram_client_options
 from litechecker.config import StandaloneSettings
 from litechecker.direct_network import DirectNetworkUnavailable
-from litechecker.direct_observation import save_last_observation
+from litechecker.direct_observation import save_last_observation, save_interrupted_observation
+from litechecker.direct_guard import NetworkInterrupted, guard_network
 from litechecker.direct_relay import DirectRelay
 from litechecker.direct_subscription import parse_trial_subscription
 from litechecker.models import ProbeStage, ResultStatus
@@ -109,7 +111,7 @@ def format_trial(report, identity, interface, scoped_exit, ordinary_exit, *, pla
     # No normal 'all available' banner: host/router filters can still redirect
     # scoped sockets, even when getsockopt confirms the requested interface.
     lines = [f"🧪 LiteChecker · пробный DIRECT ({platform_label})",
-             f"Устройство: {identity.name} ({identity.agent_id})",
+             f"Устройство: {identity.name}",
              f"Интерфейс проверок: {interface}"]
     if scoped_exit:
         lines.append(f"Выход проверок: {scoped_exit.ip}")
@@ -138,10 +140,11 @@ def format_trial(report, identity, interface, scoped_exit, ordinary_exit, *, pla
             lines.append(_direct_result_line(result))
     if report.refresh_state != "FRESH":
         lines.append("⚠️ Свежесть подписки не подтверждена.")
+    lines.extend(["", report_identity(identity.agent_id, report.app_version)])
     return "\n".join(lines)
 
 
-def _direct_result_line(result):
+def _direct_result_line(result, *, compact=False):
     line = _result_line(result)
     phase, _, code = (result.error_code or "").partition(":")
     phases = {"direct-dns": "DNS", "direct-tcp": "TCP", "direct-tls": "TLS",
@@ -170,6 +173,21 @@ def _direct_result_line(result):
         "direct_relay_start_failed": "не удалось запустить локальный транспорт Xray",
     }
     reason = explanations.get(code, "проверку через физическое подключение завершить не удалось")
+    if compact:
+        short = {
+            "direct_dns_timeout": "таймаут", "direct_dns_failed": "ошибка DNS-сервера",
+            "direct_dns_invalid_response": "некорректный ответ", "dhcp_dns_unavailable": "DNS недоступен",
+            "direct_doh_connection_failed": "DoH: подключение не удалось",
+            "direct_doh_tls_failed": "DoH: TLS не подтверждён", "direct_doh_tls_protocol": "DoH: протокол TLS не поддерживается",
+            "direct_doh_http_failed": "DoH: ошибка HTTP", "direct_doh_invalid_http": "DoH: некорректный ответ",
+            "direct_doh_response_too_large": "DoH: ответ слишком большой", "direct_doh_invalid_request": "DoH: ошибка запроса",
+            "interface_binding_failed": "привязка к интерфейсу не удалась", "interface_changed": "интерфейс изменился",
+            "interface_address_family_unavailable": "нет нужного IPv4/IPv6",
+            "direct_connection_unreachable": "маршрут недоступен", "direct_connection_failed": "причина сбоя неизвестна",
+            "unsafe_direct_address": "IP не разрешён для проверки", "direct_network_unavailable": "локальная ошибка транспорта",
+            "direct_relay_start_failed": "локальный транспорт Xray не запустился",
+        }.get(code, reason)
+        return f"{line.splitlines()[0]}\n   Не проверено: {phases[phase]} — {short}"
     detail = f"{reason} [{code}]" if code in _DIRECT_ERROR_CODES else reason
     return f"{line.splitlines()[0]}\n   Не проверено: {phases[phase]} — {detail}."
 
@@ -361,19 +379,73 @@ def scoped_dependencies(settings, network, relay):
     return dependencies
 
 
+_NETWORK_RETRY_DELAY = 2.0
+
+
 async def run_trial(settings, *, send=False, telegram=None, production=False,
                     network_factory=None, platform_label="macOS", validate_after=False):
-    """One bounded experiment; never silently fall back to the ordinary route."""
+    """One delivery per cycle, at most one fresh attempt after invalidation."""
     if production and send:
         raise ValueError("production-direct-delivery-owned-by-service")
+    interrupted = None
+    result = None
+    # Share one budget across both attempts; the service's outer deadline still
+    # covers cleanup/delivery. A restart cannot grant another full 480 seconds.
+    budget = getattr(getattr(settings, "agent", None), "run_deadline_seconds", 480) + 30
+    try:
+        async with asyncio.timeout(budget):
+            for attempt in range(2):
+                try:
+                    result = await _run_trial(
+                        settings, production=production, network_factory=network_factory,
+                        platform_label=platform_label, validate_after=validate_after,
+                    )
+                    break
+                except NetworkInterrupted as exc:
+                    interrupted = exc.reason
+                    save_interrupted_observation(
+                        settings.state_dir, agent_id=settings.identity.agent_id,
+                        reason=interrupted, observed_at=datetime.now(UTC),
+                    )
+                    if attempt == 0:
+                        await asyncio.sleep(_NETWORK_RETRY_DELAY)
+                except Exception:
+                    if interrupted is None:
+                        raise
+                    # A failed fresh attempt is not endpoint evidence. Keep the
+                    # interruption reason; cancellation still propagates.
+                    break
+    except TimeoutError:
+        if interrupted is None:
+            raise
 
-    async def deliver(text):
-        if send:
-            client = telegram or TelegramClient(**telegram_client_options(settings))
-            # Reporting uses its own optional Telegram proxy, or the ordinary
-            # route when unconfigured. Never part of probe availability evidence.
-            await client.send_chunks(chunk_message(text))
+    if interrupted is not None:
+        if result is None or result.report is None or not trial_completed(result.report):
+            from litechecker.direct_reporting import format_unavailable
+            observed_at = datetime.now(UTC)
+            save_interrupted_observation(
+                settings.state_dir, agent_id=settings.identity.agent_id,
+                reason=interrupted, observed_at=observed_at,
+            )
+            result = TrialResult(
+                format_unavailable(settings.identity, interrupted, observed_at, platform_label=platform_label),
+                False, reason=interrupted, observed_at=observed_at,
+            )
+        else:
+            notice = ("Сеть изменилась. Ниже — результаты новой проверки."
+                      if interrupted == "direct-network-changed" else
+                      "Подключение пришлось определить заново. Ниже — результаты новой проверки.")
+            separator = "\n\n" if production else "\n"
+            header, _, body = result.text.partition(separator)
+            result = replace(result, text=header + separator + notice + separator + body)
+    if send:
+        client = telegram or TelegramClient(**telegram_client_options(settings))
+        # Delivery uses its separate proxy/ordinary route, never as probe evidence.
+        await client.send_chunks(chunk_message(result.text))
+    return result
 
+
+async def _run_trial(settings, *, production, network_factory, platform_label, validate_after):
     try:
         if not network_factory:
             from litechecker.macos_network import MacDirectNetwork
@@ -394,69 +466,70 @@ async def run_trial(settings, *, send=False, telegram=None, production=False,
         text = (f"🧪 LiteChecker · пробный DIRECT ({platform_label})\n"
                 "⚠️ Проверка через физическое подключение не выполнена.\n"
                 "Интерфейс или его DNS недоступен/неоднозначен. VPN мог запретить прямой выход.\n"
-                "Настройки VPN не изменены; обычный маршрут для проверок не использован.")
-        await deliver(text)
+                "Настройки VPN не изменены; обычный маршрут для проверок не использован.\n\n"
+                + report_identity(settings.identity.agent_id, running_version()))
         return TrialResult(text, False)
-    async with DirectRelay(network) as relay:
-        scoped_exit, ordinary_exit = await asyncio.gather(
-            lookup_exit(proxy_url=relay.proxy_url), lookup_exit(),
-        )
-        if scoped_exit is None:
-            observed_at = datetime.now(UTC)
-            if production:
-                from litechecker.direct_reporting import format_unavailable
 
-                text = format_unavailable(
-                    settings.identity, "direct-exit-unavailable", observed_at,
-                    platform_label=platform_label,
-                )
-                return TrialResult(
-                    text, False, reason="direct-exit-unavailable",
-                    observed_at=observed_at, interface=network.interface,
-                )
-            text = (f"🧪 LiteChecker · пробный DIRECT ({platform_label}) · {network.interface}\n"
-                    "⚠️ Проверка не выполнена: контроль выхода через физический интерфейс не прошёл.\n"
-                    "Возможны блокировка VPN, сбой DNS, IPinfo или сети. На обычный маршрут проверки не переключались.")
-            await deliver(text)
-            return TrialResult(text, False)
-        dependencies = scoped_dependencies(settings, network, relay)
-        report = await measure_cycle(settings.agent, dependencies)
-        if validate_after:
-            try:
-                network._validate_interface()
-            except DirectNetworkUnavailable:
-                # A changed adapter invalidates attribution even for open flows
-                # which completed successfully. Do not retain green data.
-                report = report.model_copy(update={
-                    "run_status": ResultStatus.UNKNOWN,
-                    "run_reason": "direct-interface-changed",
-                    "results": [result.model_copy(update={
-                        "status": ResultStatus.UNKNOWN, "stage": ProbeStage.POLICY,
-                        "error_code": "direct-interface-changed", "latency_ms": None,
-                    }) for result in report.results],
-                })
-        save_last_observation(settings.state_dir, report, interface=network.interface,
-                              scoped_exit=scoped_exit, ordinary_exit=ordinary_exit)
+    async def measure():
+        async with DirectRelay(network) as relay:
+            scoped_exit, ordinary_exit = await asyncio.gather(
+                lookup_exit(proxy_url=relay.proxy_url), lookup_exit(),
+            )
+            if scoped_exit is None:
+                return None, scoped_exit, ordinary_exit
+            dependencies = scoped_dependencies(settings, network, relay)
+            report = await measure_cycle(settings.agent, dependencies)
+            if validate_after:
+                try:
+                    network._validate_interface()
+                except DirectNetworkUnavailable:
+                    report = report.model_copy(update={
+                        "run_status": ResultStatus.UNKNOWN,
+                        "run_reason": "direct-interface-changed",
+                        "results": [result.model_copy(update={
+                            "status": ResultStatus.UNKNOWN, "stage": ProbeStage.POLICY,
+                            "error_code": "direct-interface-changed", "latency_ms": None,
+                        }) for result in report.results],
+                    })
+            return report, scoped_exit, ordinary_exit
+
+    report, scoped_exit, ordinary_exit = await guard_network(network, measure)
+    if scoped_exit is None:
+        observed_at = datetime.now(UTC)
         if production:
-            from litechecker.direct_reporting import format_direct
+            from litechecker.direct_reporting import format_unavailable
 
-            text = format_direct(
-                report, settings.identity, network.interface, scoped_exit, ordinary_exit,
+            text = format_unavailable(
+                settings.identity, "direct-exit-unavailable", observed_at,
                 platform_label=platform_label,
             )
-        else:
-            text = format_trial(
-                report, settings.identity, network.interface, scoped_exit, ordinary_exit,
-                platform_label=platform_label,
+            return TrialResult(
+                text, False, reason="direct-exit-unavailable",
+                observed_at=observed_at, interface=network.interface,
             )
-        await deliver(text)
-        return TrialResult(
-            text,
-            trial_completed(report),
-            report=report,
-            observed_at=report.observed_at,
-            interface=network.interface,
+        text = (f"🧪 LiteChecker · пробный DIRECT ({platform_label}) · {network.interface}\n"
+                "⚠️ Проверка не выполнена: контроль выхода через физический интерфейс не прошёл.\n"
+                "Возможны блокировка VPN, сбой DNS, IPinfo или сети. На обычный маршрут проверки не переключались.\n\n"
+                + report_identity(settings.identity.agent_id, running_version()))
+        return TrialResult(text, False)
+    save_last_observation(settings.state_dir, report, interface=network.interface,
+                          scoped_exit=scoped_exit, ordinary_exit=ordinary_exit)
+    if production:
+        from litechecker.direct_reporting import format_direct
+
+        text = format_direct(
+            report, settings.identity, network.interface, scoped_exit, ordinary_exit,
+            platform_label=platform_label,
         )
+    else:
+        text = format_trial(
+            report, settings.identity, network.interface, scoped_exit, ordinary_exit,
+            platform_label=platform_label,
+        )
+    return TrialResult(
+        text, trial_completed(report), report=report,
+        observed_at=report.observed_at, interface=network.interface,
+    )
 
 
 def trial_settings(root: Path, xray: str, *, environment=None):

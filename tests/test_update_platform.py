@@ -103,6 +103,35 @@ async def test_native_activation_selects_release_code_but_original_data(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_macos_explicit_stop_persists_across_new_adapter_and_update(tmp_path, monkeypatch):
+    from litechecker import update_platform
+    from litechecker.macos_update import NativeUpdateAdapter
+    root, release = installation(tmp_path)
+    runner = Runner()
+    agents = tmp_path / "LaunchAgents"
+    adapter = NativeUpdateAdapter(root, runner=runner, launch_agents=agents)
+    monkeypatch.setattr(update_platform, "_system", lambda *args: "Darwin")
+    monkeypatch.setattr("litechecker.update_host._system", lambda *args: "Darwin")
+    monkeypatch.setattr(update_platform, "platform_adapter", lambda _: adapter)
+    monkeypatch.setattr(update_platform, "select_release", lambda _: release)
+    await update_platform.set_checker_running(root, True)
+    plist = plistlib.loads(adapter.plist.read_bytes())
+    assert plist["RunAtLoad"] is True and plist["KeepAlive"] is True
+    assert plist["ProgramArguments"][1:3] == ["-m", "litechecker.macos_service"]
+    target = f"gui/{os.getuid()}/com.litechecker.direct"
+    assert ["launchctl", "enable", target] in [args for args, *_ in runner.calls]
+    assert json.loads((root / "state/native-direct/desired-running.json").read_text()) == {"running": True}
+    await update_platform.set_checker_running(root, False)
+    assert ["launchctl", "disable", target] in [args for args, *_ in runner.calls]
+    fresh_adapter = NativeUpdateAdapter(root, runner=runner, launch_agents=agents)
+    runner.calls.clear()
+    await fresh_adapter.activate(release, True)  # stale updater observation must lose to Stop
+    assert not runner.running
+    assert not any(args[:2] == ["launchctl", "bootstrap"] for args, *_ in runner.calls)
+    assert json.loads((root / "state/native-direct/desired-running.json").read_text()) == {"running": False}
+
+
+@pytest.mark.asyncio
 async def test_native_install_and_update_activation_share_direct_plist_schema(tmp_path):
     from litechecker.native_install import install_configuration
     from litechecker.update_platform import NativeUpdateAdapter, record_desired_running

@@ -13,6 +13,14 @@ import psutil
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def isolated_startup_folder(monkeypatch):
+    # Lifecycle integration tests may launch real owned children on Windows,
+    # but must never register those temporary fixtures in the host's Startup.
+    from litechecker import windows_autostart
+    monkeypatch.setattr(windows_autostart, "set_autostart", lambda *args: None)
+
+
 def module(name):
     assert importlib.util.find_spec("litechecker." + name) is not None, "native lifecycle is not implemented"
     return importlib.import_module("litechecker." + name)
@@ -78,6 +86,30 @@ def test_dead_pid_is_historical_state_not_a_running_service(tmp_path):
     assert control.status(root)["state"] == "stopped"
 
 
+def test_reused_live_pid_after_reboot_is_stopped_without_touching_foreign_process(tmp_path):
+    control = module("windows_control")
+    root = root_at(tmp_path)
+    historical = record(root)  # Real, live test runner reusing an old recorded PID.
+    historical["created"] -= 86400
+    write_record(root, "supervisor.json", historical)
+    before = (root / "windows-state/control/supervisor.json").read_bytes()
+    assert control.status(root)["state"] == "stopped"
+    assert psutil.Process(os.getpid()).is_running()
+    assert (root / "windows-state/control/supervisor.json").read_bytes() == before
+
+
+def test_access_denied_process_identity_stays_unknown(tmp_path, monkeypatch):
+    control = module("windows_control")
+    state = module("windows_process_state")
+    root = root_at(tmp_path)
+    write_record(root, "supervisor.json", record(root))
+    class Restricted:
+        def create_time(self):
+            raise psutil.AccessDenied(os.getpid())
+    monkeypatch.setattr(state.psutil, "Process", lambda _: Restricted())
+    assert control.status(root)["state"] == "unknown"
+
+
 @pytest.mark.asyncio
 async def test_duplicate_start_does_not_spawn_another_supervisor(tmp_path, monkeypatch):
     control = module("windows_control")
@@ -141,7 +173,8 @@ def test_production_failure_report_has_explicit_windows_platform():
 
     text = format_unavailable(AgentIdentity("node", "city", "device", 600), "cycle-failed",
                               datetime.now(UTC), platform_label="Windows")
-    assert "DIRECT (Windows)" in text
+    assert text.splitlines()[1].startswith("device · Windows · ")
+    assert "DIRECT: проверка не выполнена." in text
     assert "macOS" not in text
 
 
@@ -215,6 +248,21 @@ async def test_gate_does_not_accept_a_matching_nonce_without_verified_supervisor
 
 
 @pytest.mark.asyncio
+async def test_late_baseline_supervisor_cannot_start_measurement_after_pending_stop(tmp_path, monkeypatch):
+    worker = module("windows_worker")
+    root = root_at(tmp_path)
+    write_record(root, "supervisor-stop.json", {"instance": "b" * 32})
+    async def released_gate(*args):
+        return {"instance": "a" * 32, "supervisor_instance": "b" * 32}
+    monkeypatch.setattr(worker, "wait_for_gate", released_gate)
+    def no_measurement(*args):
+        pytest.fail("a stopped pending supervisor reached worker validation/measurement")
+    monkeypatch.setattr(worker, "validate", no_measurement)
+    await worker.run_worker(root, root, "a" * 32)
+    assert not (root / "windows-state/device.json").exists()
+
+
+@pytest.mark.asyncio
 async def test_service_readiness_and_latest_failure_are_local_not_network_health(tmp_path):
     from types import SimpleNamespace
     from litechecker.collector.auth import AgentIdentity
@@ -235,7 +283,8 @@ async def test_service_readiness_and_latest_failure_are_local_not_network_health
                                result_observer=observed)
     assert calls[:2] == ["ready", "measured"]
     assert not result.available
-    assert "DIRECT (Windows)" in calls[2] and "SECRET" not in calls[2]
+    assert calls[2].splitlines()[1].startswith("device · Windows · ")
+    assert "DIRECT: проверка не выполнена." in calls[2] and "SECRET" not in calls[2]
 
 
 @pytest.mark.asyncio

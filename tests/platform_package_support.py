@@ -14,12 +14,12 @@ def extracted_profile(directory: Path, platform: str):
     secure_test_directory(directory)
     key = Ed25519PrivateKey.generate()
     paths = script("package_platforms").build_sources(
-        directory / "archives", version="0.6.1", public_key=key.public_key().public_bytes_raw(),
+        directory / "archives", version="0.6.2", public_key=key.public_key().public_bytes_raw(),
         repository="example/LiteChecker")
     archive = paths[platform]
     if platform in {"windows", "macos"}:
         label = "Windows" if platform == "windows" else "macOS"
-        archive = directory / f"archives/LiteChecker-0.6.1-{label}.zip"
+        archive = directory / f"archives/LiteChecker-0.6.2-{label}.zip"
         script("package_desktop").build_package(paths[platform], archive, platform=platform)
     with zipfile.ZipFile(archive) as bundle:
         bundle.extractall(directory / "public")

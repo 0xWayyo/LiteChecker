@@ -131,10 +131,13 @@ class AgentReport(BaseModel):
         "xray-version-mismatch",
         "deadline",
         "probe-incomplete",
+        "direct-interface-changed",
         "mass-removal-quarantine",
     ] | None = None
     duration_ms: int = Field(ge=0)
     xray_version: str | None = Field(default=None, max_length=64)
+    # None means the producer did not provide a version (e.g. an older report).
+    app_version: str | None = Field(default=None, max_length=32, pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$")
     dropped_report_count: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")

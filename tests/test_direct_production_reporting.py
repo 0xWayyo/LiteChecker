@@ -38,13 +38,13 @@ def test_healthy_report_is_short_and_never_uses_vpn_city_as_its_location():
     text = render(make_report())
     assert "DIRECT" in text and "macOS" in text and "пробный" not in text
     assert "Всё доступно" in text
-    assert "Yerevan" in text and "AS123 Test ISP" in text
+    assert "Yerevan" in text and "AS123 · Test ISP" in text
     assert "Frankfurt" not in text and "AS456 VPN" not in text
     assert "en0" in text and "1.1.1.1" in text
     assert "Successful server" not in text and "Successful domain" not in text
-    assert "VPN: 1" in text and "SNI: 1" in text
-    assert "device-fixture" in text and "2026-09-05 02:00:00 UTC" in text
-    assert len(text) < 1100
+    assert "VPN 1/1" in text and "SNI 1/1" in text
+    assert "device-fixture" in text and "05.09.2026 02:00:00 UTC" in text
+    assert len(text) < 350
 
 
 @pytest.mark.parametrize("changes", [
@@ -76,8 +76,8 @@ def test_mixed_report_separates_target_failure_from_local_dns_failure():
     text = render(make_report(results=results))
     assert "Всё доступно" not in text
     assert "2.2.2.2:443" in text and "domain.example:443" in text
-    assert "DNS" in text and "direct_dns_timeout" in text
-    assert "отказ сервера не установлен" in text
+    assert "Не проверено: DNS — таймаут" in text
+    assert "SNI: 1 · не проверены: 1" in text
     assert "ошибка локального Xray" not in text
     assert "SNI" in text and "VPN" in text
 
@@ -85,7 +85,7 @@ def test_mixed_report_separates_target_failure_from_local_dns_failure():
 def test_matching_exit_does_not_claim_vpn_bypass():
     text = render(make_report(), ordinary=SCOPED)
     assert "совпадает" in text
-    assert "Всё доступно через выбранное подключение." in text
+    assert "Всё доступно · VPN 1/1 · SNI 1/1" in text
     assert "обход VPN" not in text
 
 
@@ -103,10 +103,10 @@ def test_report_ends_with_device_id_without_generic_footnotes(sni_failed):
     text = render(report)
     assert "Привязка к интерфейсу" not in text
     assert "сам по себе не означает" not in text
-    assert text.endswith("\n\nID: device-fixture")
+    assert text.endswith("\n\nID: device-fixture · v?")
     if sni_failed:
         assert "SNI — проблемы через en0" in text
-        assert "TLS: сертификат домена не прошёл проверку." in text
+        assert "TLS: сертификат не прошёл проверку" in text
         assert "Всё доступно" not in text
 
 
@@ -114,10 +114,10 @@ def test_unavailable_report_carries_identity_and_time_but_not_raw_exception():
     from litechecker.direct_reporting import format_unavailable
     text = format_unavailable(IDENTITY, "secret-failure-http://test:private@example.com", NOW)
     assert "DIRECT" in text and "Test Mac" in text and "device-fixture" in text
-    assert "2026-09-05 02:00:00 UTC" in text
+    assert "05.09.2026 02:00:00 UTC" in text
     assert "Всё доступно" not in text and "не выполнена" in text
     assert "private" not in text and "secret-failure" not in text
-    assert "обычный маршрут" in text
+    assert "отказ серверов не установлен" in text
 
 
 def test_many_failure_results_remain_telegram_chunkable_without_losing_endpoints():
@@ -138,14 +138,13 @@ def test_failure_report_groups_context_and_keeps_each_explanation_with_its_targe
     ]
     text = render(make_report(results=results))
     blocks = text.split("\n\n")
-    assert blocks[0] == "⚠️ LiteChecker · DIRECT (macOS) · Yerevan · 2026-09-05 02:00:00 UTC · Test Mac"
+    assert blocks[0] == "⚠️ LiteChecker · Yerevan\nTest Mac · macOS · 05.09.2026 02:00:00 UTC"
     assert blocks[1] == (
-        "Маршрут: en0 · выход 1.1.1.1\nСеть по IP: AS123 Test ISP\n"
-        "IP проверок отличается от обычного выхода (8.8.8.8)."
+        "DIRECT: en0 · 1.1.1.1 · AS123 · Test ISP\n"
+        "Обычный выход: 8.8.8.8 — отличается"
     )
-    assert blocks[2] == "Есть недоступные адреса через выбранное подключение."
-    assert blocks[3].startswith("- VPN: 2 (IP: 1 / домены: 1)")
-    assert "\n- SNI: 0" in blocks[3]
+    assert blocks[2].startswith("- VPN: 2 (IP: 1 / домены: 1)")
+    assert "\n- SNI: 0" in blocks[2]
     assert "VPN — проблемы:\n🔴 Hong Kong · hk.example:443\n│ " in text
     assert "\n\n🔴 Mobile · 2.2.2.2:443\n│ " in text
     assert "ID: device-fixture" in text
@@ -155,7 +154,7 @@ def test_unavailable_report_uses_compact_header_and_separate_explanation():
     from litechecker.direct_reporting import format_unavailable
     text = format_unavailable(IDENTITY, "direct-exit-unavailable", NOW)
     header, explanation, footer = text.split("\n\n")
-    assert header == "⚠️ LiteChecker · DIRECT (macOS) · 2026-09-05 02:00:00 UTC · Test Mac"
-    assert explanation.startswith("Проверка через физическое подключение не выполнена.\n")
-    assert "На обычный маршрут" in explanation
-    assert footer == "ID: device-fixture"
+    assert header == "⚠️ LiteChecker\nTest Mac · macOS · 05.09.2026 02:00:00 UTC"
+    assert explanation.startswith("DIRECT: проверка не выполнена.\n")
+    assert "Контроль выхода не прошёл" in explanation
+    assert footer.startswith("ID: device-fixture · v")

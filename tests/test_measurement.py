@@ -29,8 +29,9 @@ def test_standalone_settings_have_no_collector_identity(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_measurement_refreshes_and_sequences_without_delivery_state(tmp_path):
+async def test_measurement_refreshes_and_sequences_without_delivery_state(tmp_path, monkeypatch):
     measurement = measurement_module()
+    monkeypatch.setattr(measurement, "running_version", lambda: "0.7.2", raising=False)
     settings = config.StandaloneSettings.from_env(environment(tmp_path)).agent
     deps = measurement.make_measurement_dependencies(settings, state_dir=tmp_path)
     assert not {"sender", "pending_store", "ack_store"} & {field.name for field in fields(deps)}
@@ -45,6 +46,7 @@ async def test_measurement_refreshes_and_sequences_without_delivery_state(tmp_pa
     assert failed.refresh_state == "UNAVAILABLE"
     assert failed.results == []
     assert [fresh.sequence, failed.sequence] == [0, 1]
+    assert fresh.app_version == failed.app_version == "0.7.2"
     assert (tmp_path / "snapshot.json").exists()
     assert not (tmp_path / "pending-report.json").exists()
     assert not (tmp_path / "collector-ack.json").exists()

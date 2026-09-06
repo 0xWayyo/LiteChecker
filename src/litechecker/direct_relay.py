@@ -13,6 +13,8 @@ import ipaddress
 import secrets
 from typing import Protocol
 
+from litechecker.runtime import join_owned_tasks
+
 
 class BoundNetwork(Protocol):
     async def connect(
@@ -63,6 +65,11 @@ class DirectRelay:
         return self
 
     async def __aexit__(self, exc_type, exc, traceback) -> None:
+        cleanup = asyncio.create_task(self._close())
+        await join_owned_tasks((cleanup,))
+        cleanup.result()
+
+    async def _close(self) -> None:
         self._closing = True
         if self._server is not None:
             self._server.close()
@@ -72,9 +79,7 @@ class DirectRelay:
         for writer in tuple(self._writers):
             writer.close()
         tasks = tuple(self._tasks)
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        await join_owned_tasks(tasks, cancel=True)
         self._username = self._password = ""
         self._port = 0
 

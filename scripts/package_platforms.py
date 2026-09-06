@@ -18,10 +18,10 @@ from litechecker.update_store import validate_source_zip
 
 ROOT = Path(__file__).resolve().parents[1]
 COMMON_MODULES = (
-    "__init__.py", "agent.py", "async_state.py", "atomic_io.py", "cli.py",
+    "__init__.py", "agent.py", "app_version.py", "async_state.py", "atomic_io.py", "cli.py",
     "collector/__init__.py", "collector/auth.py", "collector/db.py",
     "collector/reporting.py", "collector/telegram.py", "config.py",
-    "direct_check.py", "direct_network.py", "direct_observation.py", "direct_outbox.py",
+    "direct_check.py", "direct_guard.py", "direct_network.py", "direct_observation.py", "direct_outbox.py",
     "direct_relay.py", "direct_reporting.py", "direct_service.py", "direct_subscription.py",
     "distribution.py", "maintenance.py", "measurement.py", "models.py", "network_identity.py",
     "platform_security.py", "probe.py", "probe_policy.py", "recheck.py", "protocol.py", "runtime.py", "security.py",
@@ -30,7 +30,7 @@ COMMON_MODULES = (
 )
 POSIX_MODULES = ("device_setup.py", "file_safety.py", "native_config.py", "update_host.py", "update_platform.py", "update_service.py")
 PLATFORM_MODULES = {
-    "windows": ("windows_app.py", "windows_control.py", "windows_diagnostics.py", "windows_doh.py", "windows_job.py", "windows_network.py", "windows_process_state.py", "windows_security.py", "windows_trial.py", "windows_update.py", "windows_worker.py"),
+    "windows": ("windows_app.py", "windows_autostart.py", "windows_control.py", "windows_diagnostics.py", "windows_doh.py", "windows_job.py", "windows_network.py", "windows_process_state.py", "windows_security.py", "windows_trial.py", "windows_update.py", "windows_worker.py"),
     "macos": POSIX_MODULES + ("install_handoff.py", "macos_network.py", "macos_service.py", "macos_update.py", "native_install.py", "native_runtime.py"),
     "linux": POSIX_MODULES + ("linux_update.py",),
 }

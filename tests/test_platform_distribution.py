@@ -32,7 +32,7 @@ def script(name):
 def sources(tmp_path):
     key = Ed25519PrivateKey.generate()
     paths = script("package_platforms").build_sources(
-        tmp_path / "sources", version="0.6.1", public_key=key.public_key().public_bytes_raw(),
+        tmp_path / "sources", version="0.6.2", public_key=key.public_key().public_bytes_raw(),
         repository="example/LiteChecker",
     )
     return key, paths
@@ -79,7 +79,7 @@ def test_platform_inventory_channels_dependencies_and_shared_bytes(sources):
             "manifest_urls": [f"https://github.com/example/LiteChecker/releases/latest/download/release-{platform}.json"],
         }
         project = tomllib.loads(files["pyproject.toml"].decode())
-        assert project["project"]["version"] == "0.6.1"
+        assert project["project"]["version"] == "0.6.2"
         assert "dependency-groups" not in project
         assert "optional-dependencies" not in project["project"]
         packages = {p["name"] for p in tomllib.loads(files["uv.lock"].decode())["package"]}
@@ -100,7 +100,7 @@ def test_platform_inventory_channels_dependencies_and_shared_bytes(sources):
 @pytest.mark.parametrize("line_ending", [b"\r\n", b"mixed"])
 def test_runtime_profile_preserves_pins_hashes_and_bytes_across_checkout_line_endings(tmp_path, monkeypatch, line_ending):
     builder = script("package_platforms")
-    expected = builder._runtime_metadata("0.6.1")
+    expected = builder._runtime_metadata("0.6.2")
     project = (ROOT / "pyproject.toml").read_bytes().replace(b"\r\n", b"\n")
     lock = (ROOT / "uv.lock").read_bytes().replace(b"\r\n", b"\n")
     (tmp_path / "pyproject.toml").write_bytes(project.replace(b"\n", b"\r\n"))
@@ -110,7 +110,7 @@ def test_runtime_profile_preserves_pins_hashes_and_bytes_across_checkout_line_en
         lock = lock.replace(b"\n", line_ending)
     (tmp_path / "uv.lock").write_bytes(lock)
     monkeypatch.setattr(builder, "ROOT", tmp_path)
-    actual = builder._runtime_metadata("0.6.1")
+    actual = builder._runtime_metadata("0.6.2")
     assert actual == expected
     assert b"\r" not in actual["uv.lock"]
     locked = {item["name"]: item for item in tomllib.loads(lock.decode())["package"]}
@@ -131,7 +131,7 @@ def test_crlf_runtime_lock_still_rejects_missing_allowed_dependency(tmp_path, mo
     (tmp_path / "uv.lock").write_bytes(lock.replace(b"\n", b"\r\n"))
     monkeypatch.setattr(builder, "ROOT", tmp_path)
     with pytest.raises(ValueError, match="runtime lock allowlist is incomplete"):
-        builder._runtime_metadata("0.6.1")
+        builder._runtime_metadata("0.6.2")
 
 
 @pytest.mark.parametrize("platform", ["windows", "macos", "linux"])
@@ -165,16 +165,16 @@ def test_sign_all_targets_and_windows_wrapper_preserves_payload(sources, tmp_pat
     for platform, path in paths.items():
         output = tmp_path / "signed" / platform
         release.build_release(archive=path, private_key=private, output=output,
-            version="0.6.1", sequence="8", repository="example/LiteChecker", platform=platform)
+            version="0.6.2", sequence="8", repository="example/LiteChecker", platform=platform)
         manifest = json.loads((output / f"release-{platform}.json").read_bytes())
         assert manifest["schema"] == 2
         payload = manifest["payload"]
-        assert (payload["platform"], payload["version"], payload["sequence"]) == (platform, "0.6.1", 8)
+        assert (payload["platform"], payload["version"], payload["sequence"]) == (platform, "0.6.2", 8)
         key.public_key().verify(base64.b64decode(manifest["signature"]), json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode())
         artifact = output / payload["artifact"]["urls"][0].rsplit("/", 1)[1]
         assert artifact.read_bytes() == path.read_bytes()
         assert payload["artifact"]["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
-    wrapper = tmp_path / "LiteChecker-0.6.1-Windows.zip"
+    wrapper = tmp_path / "LiteChecker-0.6.2-Windows.zip"
     script("package_desktop").build_package(paths["windows"], wrapper)
     with zipfile.ZipFile(wrapper) as archive:
         for name, data in contents(paths["windows"]).items():
@@ -193,7 +193,7 @@ def test_profile_builder_never_reads_local_secrets_and_outputs_are_immutable(tmp
         assert "secrets" not in Path(path).parts, "public build read local secrets"
         return original_os_open(path, *args, **kwargs)
     monkeypatch.setattr(os, "open", guarded_descriptor)
-    options = dict(version="0.6.1", public_key=b"k" * 32, repository="example/LiteChecker")
+    options = dict(version="0.6.2", public_key=b"k" * 32, repository="example/LiteChecker")
     paths = builder.build_sources(tmp_path / "out", **options)
     before = {p.name: p.read_bytes() for p in (tmp_path / "out").iterdir()}
     with pytest.raises(ValueError):
@@ -207,16 +207,16 @@ def test_one_command_builds_all_public_artifacts_without_overwriting(tmp_path):
     private, public = tmp_path / "generated-test.key", tmp_path / "generated-test.pub"
     release.keygen(private, public)
     output = tmp_path / "release"
-    args = ["build-platforms", "--version", "0.6.1", "--sequence", "8", "--repository", "example/LiteChecker", "--private-key", str(private), "--output", str(output)]
+    args = ["build-platforms", "--version", "0.6.2", "--sequence", "8", "--repository", "example/LiteChecker", "--private-key", str(private), "--output", str(output)]
     assert release.main(args) == 0
     assert {p.name for p in output.glob("*.zip")} == {
-        "LiteChecker-0.6.1-Windows.zip", "LiteChecker-0.6.1-macOS.zip", "LiteChecker-0.6.1-Linux.zip", "LiteChecker-0.6.1-windows-update-source.zip", "LiteChecker-0.6.1-macos-update-source.zip",
+        "LiteChecker-0.6.2-Windows.zip", "LiteChecker-0.6.2-macOS.zip", "LiteChecker-0.6.2-Linux.zip", "LiteChecker-0.6.2-windows-update-source.zip", "LiteChecker-0.6.2-macos-update-source.zip",
     }
     before = {p.name: p.read_bytes() for p in output.iterdir()}
     assert len(before) == 13
     mac_manifest = json.loads(before["release-macos.json"])["payload"]["artifact"]
-    assert mac_manifest["urls"] == ["https://github.com/example/LiteChecker/releases/download/v0.6.1/LiteChecker-0.6.1-macos-update-source.zip"]
-    assert mac_manifest["sha256"] == hashlib.sha256(before["LiteChecker-0.6.1-macos-update-source.zip"]).hexdigest()
+    assert mac_manifest["urls"] == ["https://github.com/example/LiteChecker/releases/download/v0.6.2/LiteChecker-0.6.2-macos-update-source.zip"]
+    assert mac_manifest["sha256"] == hashlib.sha256(before["LiteChecker-0.6.2-macos-update-source.zip"]).hexdigest()
     assert release.main(args) == 2
     assert before == {p.name: p.read_bytes() for p in output.iterdir()}
     assert all(private.read_bytes().strip() not in data for data in before.values())
@@ -233,7 +233,7 @@ def test_signing_rejects_profile_mismatch_before_outputs(sources, tmp_path, case
     output = tmp_path / "signed"
     with pytest.raises(ValueError):
         script("release").build_release(archive=paths["macos"], private_key=private, output=output,
-            version="0.6.2" if case == "version" else "0.6.1", sequence="8",
+            version="0.6.3" if case == "version" else "0.6.2", sequence="8",
             repository="other/LiteChecker" if case == "repository" else "example/LiteChecker",
             platform="linux" if case == "platform" else "macos")
     assert not output.exists()
@@ -241,7 +241,7 @@ def test_signing_rejects_profile_mismatch_before_outputs(sources, tmp_path, case
 
 def mac_source(tmp_path):
     key = Ed25519PrivateKey.generate()
-    paths = script("package_platforms").build_sources(tmp_path / "sources", version="0.6.1",
+    paths = script("package_platforms").build_sources(tmp_path / "sources", version="0.6.2",
         public_key=key.public_key().public_bytes_raw(), repository="example/LiteChecker")
     with zipfile.ZipFile(paths["macos"]) as archive:
         archive.extractall(tmp_path / "extracted")

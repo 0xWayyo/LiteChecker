@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+import re
 
 from litechecker.collector.auth import AgentIdentity
 from litechecker.collector.reporting import (
-    _clean_field, _is_ip, _report_warnings, _status_summary, _utc_text,
+    _clean_field, _is_ip, _report_warnings, _status_summary, _report_time,
+    _success_summary, _subscription_changes, report_identity,
 )
 from litechecker.models import AgentReport, ResultStatus
+from litechecker.app_version import running_version
 
 
 def format_direct(report: AgentReport, identity: AgentIdentity, interface: str,
@@ -27,44 +30,43 @@ def format_direct(report: AgentReport, identity: AgentIdentity, interface: str,
     city = scoped_exit.city if scoped_exit and scoped_exit.city else "город не определён"
     interface = _clean_field(interface, 32)
     lines = [
-        f"{'✅' if healthy else '⚠️'} LiteChecker · DIRECT ({_clean_field(platform_label, 32)}) · {_clean_field(city, 112)}"
-        f" · {_utc_text(report.observed_at)} · {_clean_field(identity.name, 128)}",
+        f"{'✅' if healthy else '⚠️'} LiteChecker · {_clean_field(city, 112)}",
+        _device_line(identity, platform_label, report.observed_at),
         "",
     ]
-    if healthy:
-        verdict = "Всё доступно через выбранное подключение."
-    elif not complete:
-        verdict = "Проверка неполная — доступность всех адресов не подтверждена."
-    else:
-        verdict = "Есть недоступные адреса через выбранное подключение."
     if scoped_exit:
-        lines.append(f"Маршрут: {interface} · выход {_clean_field(scoped_exit.ip, 64)}")
+        route = f"DIRECT: {interface} · {_clean_field(scoped_exit.ip, 64)}"
         if scoped_exit.provider:
-            lines.append(f"Сеть по IP: {_clean_field(scoped_exit.provider, 80)}")
+            provider = _clean_field(scoped_exit.provider, 80)
+            provider = re.sub(r"^(AS[0-9]+)\s+", r"\1 · ", provider)
+            route += f" · {provider}"
+        lines.append(route)
     else:
-        lines.append(f"Маршрут: {interface} · выход не определён")
+        lines.append(f"DIRECT: {interface} · выход не определён")
     if ordinary_exit and scoped_exit:
-        if ordinary_exit.ip == scoped_exit.ip:
-            lines.append(f"IP проверок совпадает с обычным выходом ({_clean_field(ordinary_exit.ip, 64)}).")
-        else:
-            lines.append(f"IP проверок отличается от обычного выхода ({_clean_field(ordinary_exit.ip, 64)}).")
-    lines.extend(["", verdict, ""])
+        relation = "совпадает" if ordinary_exit.ip == scoped_exit.ip else "отличается"
+        lines.append(f"Обычный выход: {_clean_field(ordinary_exit.ip, 64)} — {relation}")
+    elif ordinary_exit:
+        lines.append(f"Обычный выход: {_clean_field(ordinary_exit.ip, 64)} — сравнение недоступно")
+    else:
+        lines.append("Обычный выход: не определён")
+    lines.append("")
 
     vpn = [r for r in report.results if r.check_kind == "vpn"]
     sni = [r for r in report.results if r.check_kind == "sni"]
     ip_count = sum(_is_ip(r.address) for r in vpn)
-    lines.append(f"- VPN: {len(vpn)} (IP: {ip_count} / домены: {len(vpn) - ip_count})"
-                 + (f" · {_status_summary(vpn)}" if vpn and not healthy else ""))
-    lines.append(f"- SNI: {len(sni)}" + (f" · {_status_summary(sni)}" if sni and not healthy else ""))
+    if healthy:
+        lines.append(_success_summary(vpn, sni))
+    else:
+        if not complete:
+            lines.extend(["Проверка неполная — доступность всех адресов не подтверждена.", ""])
+        lines.append(f"- VPN: {len(vpn)} (IP: {ip_count} / домены: {len(vpn) - ip_count})"
+                     + (f" · {_status_summary(vpn)}" if vpn else ""))
+        lines.append(f"- SNI: {len(sni)}" + (f" · {_status_summary(sni)}" if sni else ""))
     warnings = [f"⚠️ {warning}" for warning in _report_warnings(report)]
-    changes = [f"{label}: {len(items)}" for label, items in (
-        ("добавлено", report.diff.added), ("удалено", report.diff.removed),
-        ("изменено", report.diff.changed),
-    ) if items]
+    changes = _subscription_changes(report)
     if changes:
-        warnings.append("Изменения подписки: " + ", ".join(changes) + ".")
-    if any(r.status is ResultStatus.UNKNOWN for r in report.results):
-        warnings.append("❔ Для непроверенных адресов отказ сервера не установлен.")
+        warnings.append(changes)
     if warnings:
         lines.extend(["", *warnings])
     for kind, heading in (("vpn", "VPN — проблемы"), ("sni", f"SNI — проблемы через {interface}")):
@@ -74,26 +76,37 @@ def format_direct(report: AgentReport, identity: AgentIdentity, interface: str,
             for index, result in enumerate(group):
                 if index:
                     lines.append("")
-                title, *details = _direct_result_line(result).splitlines()
+                title, *details = _direct_result_line(result, compact=True).splitlines()
                 lines.append(title)
                 lines.extend(f"│ {detail.lstrip()}" for detail in details)
-    lines.extend(["", f"ID: {_clean_field(identity.agent_id, 128)}"])
+    lines.extend(["", report_identity(identity.agent_id, report.app_version)])
     return "\n".join(lines)
 
 
 def format_unavailable(identity: AgentIdentity, reason: str, observed_at: datetime, *, platform_label="macOS") -> str:
     explanations = {
-        "direct-interface-unavailable": "Физический интерфейс или его DNS недоступен/неоднозначен.",
-        "direct-exit-unavailable": "Не удалось проверить выход через физический интерфейс (сеть/DNS/IPinfo).",
-        "cycle-timeout": "Проверка не уложилась в установленный лимит времени.",
-        "cycle-failed": "Локальная проверка завершилась с ошибкой.",
+        "direct-interface-unavailable": "Не удалось определить физический интерфейс или его DNS.",
+        "direct-exit-unavailable": "Контроль выхода не прошёл (сеть/DNS/IPinfo).",
+        "cycle-timeout": "Исчерпан общий лимит времени.",
+        "cycle-failed": "Локальная ошибка проверки; отказ серверов не установлен.",
+        "direct-network-changed": "Сеть изменилась, повтор не завершён. Старые результаты отброшены.",
+        "direct-network-unverifiable": "Подключение не подтверждено, повтор не завершён. Старые результаты отброшены.",
     }
     return "\n".join([
-        f"⚠️ LiteChecker · DIRECT ({_clean_field(platform_label, 32)}) · {_utc_text(observed_at)} · {_clean_field(identity.name, 128)}",
+        "⚠️ LiteChecker",
+        _device_line(identity, platform_label, observed_at),
         "",
-        "Проверка через физическое подключение не выполнена.",
-        explanations.get(reason, "Локальная проверка недоступна; отказ серверов не установлен."),
-        "На обычный маршрут или Telegram-прокси проверки не переключались.",
+        "DIRECT: проверка не выполнена.",
+        explanations.get(reason, "Локальная ошибка проверки; отказ серверов не установлен."),
         "",
-        f"ID: {_clean_field(identity.agent_id, 128)}",
+        report_identity(identity.agent_id, running_version()),
     ])
+
+
+def _device_line(identity: AgentIdentity, platform_label: str, observed_at: datetime) -> str:
+    name = _clean_field(identity.name, 128)
+    platform_label = _clean_field(platform_label, 32)
+    suffix = f" ({platform_label})"
+    if name.endswith(suffix) and len(name) > len(suffix):
+        name = name[:-len(suffix)]
+    return f"{name} · {platform_label} · {_report_time(observed_at)}"

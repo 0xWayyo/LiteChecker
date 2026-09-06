@@ -153,7 +153,7 @@ async def test_each_production_cycle_rediscovers_and_refreshes(monkeypatch, tmp_
     second = await direct_check.run_trial(settings, production=True)
 
     assert calls == {"discover": 2, "cycle": 2}
-    assert "DIRECT (macOS)" in first.text and "пробный" not in first.text
+    assert "DIRECT: en0" in first.text and "macOS" in first.text and "пробный" not in first.text
     assert second.report.event_id == "event-2"
 
 

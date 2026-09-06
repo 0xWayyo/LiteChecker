@@ -91,10 +91,21 @@ def process_record(root: Path, release: Path, role: str, instance: str, *, phase
 
 
 def process_exists(record: dict) -> bool:
+    """A PID reused after exit/reboot is not the recorded process.
+
+    AccessDenied deliberately propagates: inability to inspect identity is not
+    proof that the process exited, and must not enable a duplicate worker.
+    """
     pid = record.get("pid")
-    if type(pid) is not int or not 0 < pid <= 0xFFFFFFFF:
+    created = record.get("created")
+    if (type(pid) is not int or not 0 < pid <= 0xFFFFFFFF
+            or type(created) not in (int, float) or not math.isfinite(created) or created <= 0):
         raise ValueError("invalid-process-record")
-    return psutil.pid_exists(pid)
+    try:
+        process = psutil.Process(pid)
+        return abs(process.create_time() - created) <= 0.001 and process.status() != psutil.STATUS_ZOMBIE
+    except psutil.NoSuchProcess:
+        return False
 
 
 def process_matches(root: Path, record: dict, role: str) -> bool:

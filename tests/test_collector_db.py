@@ -164,6 +164,7 @@ def test_v7_upgrade_preserves_history_outbox_and_legacy_duplicate_digest(tmp_pat
     report = _report().model_copy(update={"results": [result]})
     db.accept_report(report, identity, received_at=NOW)
     legacy_payload = report.model_dump(mode="json")
+    legacy_payload.pop("app_version", None)
     for item in legacy_payload["results"]:
         del item["check_kind"]
     legacy_digest = hashlib.sha256(json.dumps(

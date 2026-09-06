@@ -168,6 +168,8 @@ async def test_windows_trial_end_validation_invalidates_even_successful_results(
     assert result.available is (not changed)
     assert result.report.results[0].status is (ResultStatus.UNKNOWN if changed else ResultStatus.UP)
     saved = json.loads((tmp_path / "last-observation.json").read_text())
+    restored = AgentReport.model_validate(saved["report"])
+    assert restored.results == result.report.results
     assert saved["vpn_bypass_confirmed"] is False
     if changed:
         assert saved["report"]["run_reason"] == "direct-interface-changed"

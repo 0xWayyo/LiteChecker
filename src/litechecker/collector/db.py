@@ -1283,6 +1283,8 @@ def _safe_report_digest(report: AgentReport) -> str:
         return value
 
     document = report.model_dump(mode="json")
+    if document.get("app_version") is None:
+        document.pop("app_version", None)
     # Old agents omit the kind; upgraded collectors must still recognize their
     # queued retries against the digest accepted before this field existed.
     for result in document["results"]:

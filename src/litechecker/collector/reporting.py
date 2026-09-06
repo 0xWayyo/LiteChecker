@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from litechecker.collector.auth import AgentIdentity
 from litechecker.models import AgentReport, ProbeResult, ResultStatus
 from litechecker.security import redact
+from litechecker.app_version import version_suffix
 
 
 _STATUS_ORDER = {
@@ -16,6 +17,10 @@ _STATUS_ORDER = {
     ResultStatus.UNKNOWN: 1,
     ResultStatus.UP: 2,
 }
+
+
+def report_identity(agent_id: str, app_version: str | None) -> str:
+    return f"ID: {_clean_field(agent_id, 128)}{version_suffix(app_version)}"
 
 
 def format_report(
@@ -43,16 +48,17 @@ def format_report(
         and not delayed
     )
     icon = "✅" if healthy else "⚠️"
-    lines = [f"{icon} LiteChecker · {_clean_field(agent.city, 128)}"]
+    lines = [f"{icon} LiteChecker · {_clean_field(agent.city, 128)}",
+             f"{_clean_field(agent.name, 128)} · {_report_time(report.observed_at)}", ""]
     if healthy:
-        lines.append("Всё доступно.")
+        lines.append(_success_summary(vpn, sni))
     elif not ordered:
         lines.append("Доступность не проверена: нет результатов.")
     elif not failures:
         lines.append("Проверенные адреса доступны, но есть предупреждения.")
     else:
         lines.append("Обнаружены проблемы:")
-    if ordered:
+    if ordered and not healthy:
         ip_count = sum(_is_ip(result.address) for result in vpn)
         domain_count = len(vpn) - ip_count
         lines.append(
@@ -64,10 +70,6 @@ def format_report(
                 f"SNI: {len(sni)}"
                 + (f" · {_status_summary(sni)}" if not healthy else "")
             )
-    lines.append(
-        f"{_utc_text(report.observed_at)} · "
-        f"{_clean_field(agent.name, 128)} ({_clean_field(agent.agent_id, 128)})"
-    )
     if recovered:
         lines.append("🟢 Агент снова на связи.")
     warnings = _report_warnings(report)
@@ -77,25 +79,23 @@ def format_report(
             "это состояние на время проверки."
         )
     lines.extend(f"⚠️ {warning}" for warning in warnings)
-    changes = [
-        f"{label}: {len(values)}"
-        for label, values in (
-            ("добавлено", report.diff.added),
-            ("удалено", report.diff.removed),
-            ("изменено", report.diff.changed),
-        )
-        if values
-    ]
+    changes = _subscription_changes(report)
     if changes:
-        lines.append("Подписка: " + ", ".join(changes) + ".")
+        lines.append(changes)
     for kind, heading in (
-        ("vpn", "VPN — IP и домены"),
-        ("sni", "SNI — доступность доменов напрямую"),
+        ("vpn", "VPN — проблемы:"),
+        ("sni", "SNI — проблемы:"),
     ):
         group = [result for result in failures if result.check_kind == kind]
         if group:
             lines.extend(["", heading])
-            lines.extend(_result_line(result) for result in group)
+            for index, result in enumerate(group):
+                if index:
+                    lines.append("")
+                title, *detail = _result_line(result).splitlines()
+                lines.append(title)
+                lines.extend(f"│ {line.strip()}" for line in detail)
+    lines.extend(["", report_identity(agent.agent_id, report.app_version)])
     return "\n".join(lines)
 
 
@@ -195,43 +195,64 @@ def _explanation(result: ProbeResult) -> str:
     stage = result.stage.value
     code = result.error_code or ""
     if stage == "DNS":
-        return "DNS: не удалось получить IP-адрес домена."
+        return "DNS: IP-адрес не получен"
     if stage == "TCP":
         if code in {"tcp-timeout", "connect-timeout"}:
-            return "TCP: порт не ответил за время ожидания."
+            return "TCP: таймаут"
         if code == "tcp-refused":
-            return "TCP: сервер отклонил подключение к порту."
-        return "TCP: не удалось подключиться к порту."
+            return "TCP: подключение отклонено"
+        return "TCP: подключение не удалось"
     if stage == "VLESS_E2E":
         detail = (
-            "истекло время ожидания"
+            "таймаут"
             if code == "canary-timeout"
-            else "контрольный HTTPS-запрос не прошёл"
+            else "контрольный HTTPS не прошёл"
         )
-        return f"Порт отвечает, но VPN-проверка не прошла: {detail}."
+        return f"Порт отвечает, VPN: {detail}"
     if stage == "TLS_CERTIFICATE":
-        return "TLS: сертификат домена не прошёл проверку."
+        return "TLS: сертификат не прошёл проверку"
     if stage == "TLS_HANDSHAKE":
         if code == "tls-timeout":
-            return "Порт отвечает, но истекло время ожидания TLS-соединения с доменом."
-        return "Порт отвечает, но TLS-соединение с доменом не установлено."
+            return "Порт отвечает, TLS: таймаут"
+        return "Порт отвечает, TLS: соединение не установлено"
     if stage == "AGENT_NETWORK":
-        return "Не проверено: контрольный интернет-запрос с этого агента не прошёл."
+        return "Не проверено: контроль сети не прошёл"
     if stage == "XRAY":
-        return "Не проверено: ошибка локального Xray на агенте."
+        return "Не проверено: локальная ошибка Xray"
     if stage == "DEADLINE":
-        return "Не проверено: исчерпан общий лимит времени проверки."
+        return "Не проверено: общий лимит времени"
     if stage == "POLICY":
+        if code == "direct-interface-changed":
+            return "Не проверено: интерфейс изменился"
         if code == "tls-local-error":
-            return "Не проверено: локальная ошибка TLS на агенте."
+            return "Не проверено: локальная ошибка TLS"
         if code == "probe-error":
-            return "Не проверено: локальная ошибка проверки на агенте."
+            return "Не проверено: локальная ошибка проверки"
         if code == "dns-answer-limit":
-            return "Не проверено: число IP в ответе DNS превышает допустимый лимит."
+            return "Не проверено: слишком много IP в ответе DNS"
         if code == "forbidden-address":
-            return "Не проверено: адрес не является разрешённым публичным IP."
-        return "Не проверено: адрес не прошёл проверку безопасности назначения."
-    return "Результат проверки не определён."
+            return "Не проверено: IP не разрешён для проверки"
+        return "Не проверено: ограничение безопасности адреса"
+    return "Результат не определён"
+
+
+def _success_summary(vpn: list[ProbeResult], sni: list[ProbeResult]) -> str:
+    counts = [f"{label} {sum(r.status is ResultStatus.UP for r in rows)}/{len(rows)}"
+              for label, rows in (("VPN", vpn), ("SNI", sni))]
+    return "Всё доступно · " + " · ".join(counts)
+
+
+def _subscription_changes(report: AgentReport) -> str | None:
+    changes = [f"{prefix}{len(rows)}" for prefix, rows in (
+        ("+", report.diff.added), ("−", report.diff.removed), ("изменено: ", report.diff.changed),
+    ) if rows]
+    return "Подписка: " + " · ".join(changes) if changes else None
+
+
+def _report_time(value: datetime) -> str:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("datetime must be UTC-aware")
+    return value.astimezone(UTC).strftime("%d.%m.%Y %H:%M:%S UTC")
 
 
 def _status_summary(results: list[ProbeResult]) -> str:
@@ -281,6 +302,7 @@ def _report_warnings(report: AgentReport) -> list[str]:
         "xray-version-mismatch": "Проверка VPN не выполнена: версия Xray не соответствует настройкам.",
         "deadline": "Проверка завершена не полностью: исчерпан общий лимит времени.",
         "probe-incomplete": "Проверка завершена не полностью: произошла ошибка на агенте.",
+        "direct-interface-changed": "Проверка прервана: интерфейс изменился.",
         "mass-removal-quarantine": "Резкое сокращение подписки требует повторного подтверждения; сохранён прежний список.",
     }
     if report.run_reason:

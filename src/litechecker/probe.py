@@ -23,6 +23,7 @@ import psutil
 from litechecker.models import ProbeResult, ProbeStage, ResultStatus, TargetConfig
 from litechecker.security import is_forbidden_ip
 from litechecker.probe_policy import PROBE_TIMEOUT_SECONDS, TCP_TIMEOUT_SECONDS
+from litechecker.runtime import join_owned_tasks
 
 
 @dataclass(frozen=True)
@@ -175,12 +176,17 @@ class XrayProcess:
             yield session
             await session.ensure_healthy()
         finally:
-            await _stop_process(process, self._shutdown_timeout)
-            try:
-                await asyncio.wait_for(stderr_task, timeout=self._shutdown_timeout)
-            except TimeoutError:
-                stderr_task.cancel()
-                await asyncio.gather(stderr_task, return_exceptions=True)
+            async def cleanup():
+                try:
+                    await _stop_process(process, self._shutdown_timeout)
+                finally:
+                    try:
+                        await asyncio.wait_for(stderr_task, timeout=self._shutdown_timeout)
+                    except TimeoutError:
+                        await join_owned_tasks((stderr_task,), cancel=True)
+            cleanup_task = asyncio.create_task(cleanup())
+            await join_owned_tasks((cleanup_task,))
+            cleanup_task.result()
 
 
 class XrayTunnel:
@@ -674,10 +680,7 @@ async def probe_all(
             timeout=max(0.0, deadline_seconds),
         )
     finally:
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        await join_owned_tasks(tasks, cancel=True)
 
     results: list[ProbeResult] = []
     for target, task in zip(targets, tasks, strict=True):
