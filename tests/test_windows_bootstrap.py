@@ -108,8 +108,10 @@ def test_powershell_app_streams_python_menu_and_preserves_exit_code(tmp_path, ex
     entry = tmp_path / "controlled-menu.py"
     entry.write_text(
         "import pathlib, sys\n"
+        "sys.stdout.reconfigure(encoding='utf-8', errors='replace')\n"
+        "sys.stderr.reconfigure(encoding='utf-8', errors='replace')\n"
         "root = pathlib.Path(sys.argv[sys.argv.index('--root') + 1])\n"
-        "print('fixture-output', flush=True)\n"
+        "print('┌─ LiteChecker Windows · fixture-output', flush=True)\n"
         "value = input('fixture-input:')\n"
         "print('fixture-read:' + value, flush=True)\n"
         "raise SystemExit(0 if root.name == 'success' else 7)\n",
@@ -141,7 +143,7 @@ Invoke-NormalApp
          "-Python", sys.executable, "-Entry", str(entry), "-Root", str(root)],
         encoding="utf-8", input="controlled-input\n", capture_output=True, timeout=30,
     )
-    assert "fixture-output" in result.stdout
+    assert "┌─ LiteChecker Windows · fixture-output" in result.stdout
     assert "fixture-input:" in result.stdout
     assert "fixture-read:controlled-input" in result.stdout
     assert (result.returncode == 0) is (exit_code == 0)

@@ -5,10 +5,18 @@ from __future__ import annotations
 import argparse
 import asyncio
 from pathlib import Path
+import sys
 from typing import Callable
 
 
 _REPORT_LIMIT = 2 * 1024 * 1024
+
+
+def _configure_console_streams() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="replace")
 
 
 class _Controls:
@@ -243,6 +251,7 @@ def run_menu(
 
 
 def main(argv=None) -> int:
+    _configure_console_streams()
     parser = argparse.ArgumentParser(description="LiteChecker Windows")
     parser.add_argument("--root", required=True, type=Path)
     args = parser.parse_args(argv)

@@ -58,6 +58,8 @@ jobs:
         run: uv sync --frozen --all-groups
       - name: Compare native ACL ownership with Windows token defaults
         run: uv run --no-sync python tests/windows_acl_diagnostic.py
+      - name: Diagnose atomic JSON replacement with a real Windows held reader
+        run: uv run --no-sync python tests/windows_atomic_diagnostic.py
       - name: Test native runtime, process ownership, ACLs and update transactions
         # Author-only ZIP builders run on Linux/macOS above. These tests actually
         # execute Windows Job Objects, private NTFS ACLs, BAT and PowerShell 5.1.

@@ -3,6 +3,8 @@ import base64
 from collections import deque
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 
 class FakeControls:
@@ -35,6 +37,28 @@ class FakeControls:
 def answers(*items):
     values = iter(items)
     return lambda _prompt="": next(values)
+
+
+def test_real_isolated_entry_normalizes_redirected_ansi_streams_before_onboarding(tmp_path):
+    entry = Path(__file__).resolve().parents[1] / "scripts" / "windows-app-entry.py"
+    wrapper = (
+        "import io,runpy,sys;"
+        "sys.stdin=io.TextIOWrapper(sys.stdin.buffer,encoding='utf-8');"
+        "sys.stdout=io.TextIOWrapper(sys.stdout.buffer,encoding='cp1251');"
+        "sys.stderr=io.TextIOWrapper(sys.stderr.buffer,encoding='cp1251');"
+        "sys.argv=[sys.argv[1],'menu','--root',sys.argv[2]];"
+        "runpy.run_path(sys.argv[0],run_name='__main__')"
+    )
+    result = subprocess.run(
+        [sys.executable, "-I", "-B", "-c", wrapper, str(entry), str(tmp_path)],
+        input=b"https://subscription.invalid/test\n\n0\n",
+        capture_output=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "┌─ LiteChecker Windows" in result.stdout.decode("utf-8")
+    assert (tmp_path / "windows-state" / "settings.json").is_file()
 
 
 def test_main_menu_dynamic_start_stop_and_close_does_not_stop(tmp_path):

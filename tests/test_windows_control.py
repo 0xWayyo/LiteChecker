@@ -555,24 +555,46 @@ async def test_native_supervisor_worker_and_child_lifecycle(tmp_path, monkeypatc
 
     monkeypatch.setattr(control, "_spawn_supervisor", observed_spawn)
 
-    def failed_start_details(first):
-        details = {"result": first, "attempt": attempt,
+    async def failed_start_details(result, *, point):
+        # The failing result remains authoritative. Briefly observe its aftermath
+        # so an asynchronously exiting supervisor can finish the safe fault file.
+        deadline = time.monotonic() + 1
+        while any(process.poll() is None for process in launches) and time.monotonic() < deadline:
+            if any((root / "windows-state" / f"fixture-{role}-fault.json").exists()
+                   for role in ("supervisor", "worker")):
+                break
+            await asyncio.sleep(0.05)
+        details = {"result": result, "point": point, "attempt": attempt,
                    "created": [{"pid": process.pid, "returncode": process.poll()} for process in launches]}
+        details["observed_now"] = control.status(root)
+        details["records"] = {}
         for role in ("supervisor", "worker"):
             path = root / "windows-state" / f"fixture-{role}-fault.json"
             try:
                 details[role] = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
             except (OSError, ValueError):
                 details[role] = "fixture-diagnostic-unavailable"
+            try:
+                record = control.read_record(root, f"{role}.json")
+                item = {"present": record is not None}
+                if record is not None:
+                    item["pid"] = record.get("pid") if type(record.get("pid")) is int else None
+                    item["phase"] = (record.get("phase") if record.get("phase") in
+                                     {"starting", "ready", "stopping", "stopped"} else "unrecognized")
+                    item["exists"] = control.process_exists(record)
+                    item["identity_matches"] = control._process_matches(root, record, role)
+                details["records"][role] = item
+            except Exception as error:
+                details["records"][role] = {"error": native_fault_diagnostic(error)}
         return details
 
     supervisor_pid = worker_pid = child_pid = None
     try:
         first = await control.start(root)
-        assert first["status"] == "started", failed_start_details(first)
+        assert first["status"] == "started", await failed_start_details(first, point="initial-start")
         supervisor_pid = first["pid"]
         second = await control.start(root)
-        assert second["status"] == "already-running" and second["pid"] == supervisor_pid
+        assert second["status"] == "already-running" and second["pid"] == supervisor_pid, await failed_start_details(second, point="duplicate-start")
         saved = json.loads((root / "windows-state/control/worker.json").read_text())
         worker_pid = saved["pid"]
         deadline = time.monotonic() + 5
