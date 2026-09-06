@@ -4,11 +4,17 @@ set +x
 set -uo pipefail
 umask 077
 source_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P) || exit 2
+active_menu=false
+data_root=''
+if [[ "${1:-}" == --active-menu ]]; then
+    [[ $# == 3 && -d "$2" && ! -L "$2" ]] || exit 2
+    active_menu=true; data_root=$2; shift 2
+fi
 system=$(uname -s)
 case "$system" in
     Darwin) root=${LITECHECKER_NATIVE_ROOT:-"$HOME/Library/Application Support/LiteChecker"}; kind=native; runtime=.native-direct; settings=native-settings.json ;;
     Linux)
-        root=$source_root
+        root=${data_root:-$source_root}
         kind=docker; runtime=.updater-runtime; settings=.env.standalone
         ;;
     *) printf '%s\n' 'Поддерживаются macOS и Linux.' >&2; exit 2 ;;
@@ -27,6 +33,31 @@ regular() {
         [[ -n "$parent" ]] || parent=/
     done
 }
+
+# A prepared baseline selects and pins the next UI; the actual bash PID holds
+# its exact managed-script lease after exec. Initial install stays shell-only.
+if ! $active_menu; then
+    case "${1:-menu}" in
+        menu|folder|settings)
+            if [[ -x "$root/$runtime/venv/bin/python" && -f "$root/scripts/update.sh" ]]; then
+                exec bash "$root/scripts/update.sh" "${1:-menu}"
+            fi
+            if [[ -e "$source_root/distribution.json" || -e "$source_root/update-channel.json" || -e "$source_root/MACOS.md" || -e "$source_root/LINUX.md" ]]; then
+                refusal='Пакет не соответствует этой ОС или повреждён. Распакуйте ZIP для своей системы.'
+                regular "$source_root/CONTENTS.sha256.json" && regular "$source_root/scripts/install-profile.sh" || { fail "$refusal"; exit 2; }
+                expected=$(awk '$1 == "\"scripts/install-profile.sh\":" {value=$2; gsub(/[",]/, "", value); print value}' "$source_root/CONTENTS.sha256.json")
+                if command -v sha256sum >/dev/null 2>&1; then actual=$(sha256sum "$source_root/scripts/install-profile.sh");
+                else actual=$(shasum -a 256 "$source_root/scripts/install-profile.sh"); fi
+                [[ "$expected" =~ ^[0-9a-f]{64}$ && "${actual%% *}" == "$expected" ]] || { fail "$refusal"; exit 2; }
+                source "$source_root/scripts/install-profile.sh"
+                marker=$(profile_line "$source_root/distribution.json" 4096) || { fail "$refusal"; exit 2; }
+                target=linux; [[ "$system" != Darwin ]] || target=macos
+                [[ "$marker" == "{\"platform\":\"$target\",\"schema\":1}" ]] || { fail "$refusal"; exit 2; }
+            fi
+            ;;
+    esac
+fi
+
 installed() {
     regular "$root/$settings" && regular "$root/run.sh" \
         && regular "$root/secrets/telegram_bot_token" && [[ -s "$root/secrets/telegram_bot_token" ]] \
@@ -93,8 +124,10 @@ lifecycle() {
 }
 
 settings_python() {
-    local python="$root/$runtime/venv/bin/python" current target directory links=0
-    for directory in "$root" "$root/$runtime" "$root/$runtime/venv" "$root/$runtime/venv/bin"; do
+    local runtime_root=$root current target directory links=0
+    if $active_menu; then runtime_root=$source_root; fi
+    local python="$runtime_root/$runtime/venv/bin/python"
+    for directory in "$runtime_root" "$runtime_root/$runtime" "$runtime_root/$runtime/venv" "$runtime_root/$runtime/venv/bin"; do
         [[ -d "$directory" && ! -L "$directory" ]] || return 1
     done
     current=$python
@@ -105,7 +138,7 @@ settings_python() {
     done
     [[ -f "$current" && -x "$current" ]] || return 1
     directory=$(cd -- "$(dirname -- "$current")" && pwd -P) || return 1
-    case "$directory/$(basename -- "$current")" in "$root/$runtime/"*) printf '%s\n' "$python";; *) return 1;; esac
+    case "$directory/$(basename -- "$current")" in "$runtime_root/$runtime/"*) printf '%s\n' "$python";; *) return 1;; esac
 }
 
 edit_settings() {

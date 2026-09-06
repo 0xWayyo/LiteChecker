@@ -11,7 +11,7 @@ import time
 
 from filelock import FileLock, Timeout
 
-from litechecker.update_launcher import select_release
+from litechecker.update_launcher import LauncherError, select_release
 from litechecker.windows_job import WindowsJob
 from litechecker.windows_process_state import (
     NONCE, command, control_path, process_exists, process_matches as _process_matches, python_launch,
@@ -28,7 +28,12 @@ def status(root: Path) -> dict:
     """Observe without creating state, acquiring locks, or trusting a bare PID."""
     try:
         root = safe_root(root)
-        current = version(select_release(root))
+        try:
+            current = version(select_release(root))
+        except LauncherError:
+            # Recovery still observes the exact baseline-owned supervisor.
+            # A damaged active selector must not hide the Stop action.
+            current = version(root)
         record = read_record(root, "supervisor.json")
         if record is None:
             return {"state": "stopped", "version": current}

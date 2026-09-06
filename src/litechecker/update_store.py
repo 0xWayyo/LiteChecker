@@ -602,14 +602,27 @@ class UpdateStore:
     def remove_release(self, version: str) -> bool:
         if type(version) is not str or VERSION_RE.fullmatch(version) is None:
             return False
-        return self._remove_owned(self.releases / version, self.releases)
+        from .runtime_lease import dispatch_lock, live_versions
+        with dispatch_lock(self.root):
+            if version in live_versions(self.root):
+                return False
+            return self._remove_owned(self.releases / version, self.releases)
 
     def cleanup(self, *, active: str | None, previous: str | None, now: datetime) -> dict[str, int]:
+        from .runtime_lease import dispatch_lock, live_versions
+        with dispatch_lock(self.root):
+            return self._cleanup(active=active, previous=previous, now=now,
+                                 in_use=live_versions(self.root))
+
+    def _cleanup(self, *, active, previous, now, in_use):
         self.ensure_layout()
         if now.tzinfo is None:
             raise StoreError("cleanup time must be timezone-aware")
         counts = {"releases": 0, "temporary": 0}
-        keep = {value for value in (active, previous) if value is not None}
+        state = self.read_install()
+        keep = {value for value in (active, previous, state["active"], state["previous"]) if value is not None} | in_use
+        if state["pending"] is not None:
+            keep.update(value for value in (state["pending"]["from_version"], state["pending"]["to_version"]) if value is not None)
         for entry in tuple(self.releases.iterdir()):
             if (
                 entry.name in keep

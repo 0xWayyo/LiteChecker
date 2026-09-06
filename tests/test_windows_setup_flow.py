@@ -63,6 +63,15 @@ def menu_command(tmp_path, host):
     tmp_path = tmp_path.resolve()
     secure_test_directory(tmp_path)
     entry = ROOT / "scripts/windows-app-entry.py"
+    script_root = ROOT
+    if os.name == "nt":
+        from platform_package_support import extracted_profile
+        payload, _ = extracted_profile(tmp_path / "packaged", "windows")
+        # Use only the exact public wrapper payload, with settings at the
+        # caller's private root so every prompt assertion keeps the same scope.
+        shutil.copytree(payload, tmp_path, dirs_exist_ok=True)
+        entry = tmp_path / "scripts/windows-app-entry.py"
+        script_root = tmp_path
     if host == "python":
         return [sys.executable, "-I", "-B", str(entry), "menu", "--root", str(tmp_path)]
     powershell = shutil.which("powershell.exe")
@@ -90,7 +99,7 @@ $script:RootPath=$Root
 Invoke-NormalApp
 ''', encoding="utf-8-sig")
     return [powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-File", str(harness),
-            "-ScriptPath", str(ROOT / "scripts/windows-native.ps1"),
+            "-ScriptPath", str(script_root / "scripts/windows-native.ps1"),
             "-Python", sys.executable, "-Entry", str(entry), "-Root", str(tmp_path)]
 
 

@@ -87,7 +87,7 @@ ensure_destination_parent() {
 verify_payload() {
     local relative=$1 incoming="$source_root/$1" expected actual
     require_source_file "$relative"
-    expected=$(awk -v key="\"$relative\":" '$1 == key {value=$2; gsub(/[\",]/, "", value); print value}' "$manifest")
+    expected=$(awk -v key="\"$relative\":" '$1 == key {value=$2; gsub(/[",]/, "", value); print value}' "$manifest")
     [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || die "Файл не описан однозначно в manifest: $relative"
     actual=$(shasum -a 256 "$incoming")
     actual=${actual%% *}

@@ -13,6 +13,7 @@ import sys
 if __package__:
     from . import distribution, platform_security
 else:  # The stable POSIX entry also executes this file directly.
+    sys.path.insert(0, str(Path(__file__).absolute().parent))
     import distribution
     import platform_security
 
@@ -92,7 +93,7 @@ def read_bytes(root: Path, path: Path, maximum=65536) -> bytes:
         os.close(fd)
 
 
-def select_release(root: Path) -> Path:
+def validate_baseline(root: Path) -> Path:
     root = checked_path(Path(root), Path(root))
     try:
         platform = distribution.read_distribution(root)
@@ -110,6 +111,12 @@ def select_release(root: Path) -> Path:
                 raise LauncherError()
     except (OSError, ValueError):
         raise LauncherError() from None
+    return root
+
+
+def select_release(root: Path) -> Path:
+    root = validate_baseline(root)
+    platform = distribution.read_distribution(root)
     state = checked_path(root, root / ".updates/install.json")
     if not state.exists():
         return root
@@ -172,6 +179,12 @@ def main(argv=None) -> int:
     args, remaining = parser.parse_known_args(argv)
     try:
         root = args.root.absolute()
+        if remaining and remaining[0] in {"menu", "folder", "settings"}:
+            # Keep stop/status's stable launcher stdlib-only. UI dispatch needs
+            # the prepared runtime's process identity and short lock support.
+            sys.path.insert(0, str(root / "src"))
+            from litechecker.runtime_lease import launch_menu
+            return launch_menu(root, remaining[0])
         # Stopping must remain available even when an active release or its
         # selector is damaged. Bootstrap code has the stable control contract.
         release = checked_path(root, root) if remaining and remaining[0] == "stop" else select_release(root)

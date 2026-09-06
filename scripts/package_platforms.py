@@ -26,7 +26,7 @@ COMMON_MODULES = (
     "distribution.py", "maintenance.py", "measurement.py", "models.py", "network_identity.py",
     "platform_security.py", "probe.py", "protocol.py", "runtime.py", "security.py",
     "standalone.py", "state.py", "subscription.py", "telegram_proxy.py", "terminal_ui.py",
-    "update_launcher.py", "update_manifest.py", "update_store.py", "updater.py",
+    "update_launcher.py", "runtime_lease.py", "update_manifest.py", "update_store.py", "updater.py",
 )
 POSIX_MODULES = ("device_setup.py", "file_safety.py", "native_config.py", "update_host.py", "update_platform.py", "update_service.py")
 PLATFORM_MODULES = {

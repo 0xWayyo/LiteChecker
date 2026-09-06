@@ -558,6 +558,8 @@ function Invoke-CleanPython([string[]]$Arguments) {
 }
 
 function Invoke-NormalApp {
+    # This bootstrap/runtime stays stable. The isolated entry validates and
+    # dispatches the active UI/runtime; its root argument remains the data root.
     Assert-SafeRegularFile $script:AppEntryScript "Локальный entry script"
     Protect-PrivateRoot $script:RootPath
     Initialize-NativeRuntime -IncludeXray $true

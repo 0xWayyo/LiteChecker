@@ -1,16 +1,16 @@
 """Opt-in native Windows smoke for the real pinned uv/Python/Xray bootstrap."""
 
 import json
+import asyncio
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import sys
+import time
 
 import pytest
 
 
-REPOSITORY = Path(__file__).resolve().parents[1]
 ENABLED = os.name == "nt" and os.environ.get("LC_WINDOWS_BOOTSTRAP_SMOKE") == "1"
 
 
@@ -18,27 +18,12 @@ ENABLED = os.name == "nt" and os.environ.get("LC_WINDOWS_BOOTSTRAP_SMOKE") == "1
 def test_real_candidate_prepare_and_isolated_validation(tmp_path):
     from litechecker.update_launcher import runtime_python
     from litechecker.windows_process_state import python_launch
-    from windows_test_support import secure_test_directory
-
-    baseline = tmp_path / "LiteChecker" / "_app"
-    baseline.mkdir(parents=True)
-    secure_test_directory(baseline)
-    candidate = baseline / ".updates" / "releases" / "0.5.1"
-    candidate.mkdir(parents=True)
-
-    for source in sorted((REPOSITORY / "src" / "litechecker").rglob("*.py")):
-        destination = candidate / source.relative_to(REPOSITORY)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, destination)
-    for relative in (
-        "pyproject.toml",
-        "uv.lock",
-        "scripts/windows-native.ps1",
-        "scripts/windows-app-entry.py",
-    ):
-        destination = candidate / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(REPOSITORY / relative, destination)
+    from platform_package_support import extracted_profile
+    from litechecker.update_store import UpdateStore, validate_source_zip
+    from test_active_menu import candidate_archive
+    baseline, key = extracted_profile(tmp_path, "windows")
+    candidate = UpdateStore(baseline).stage("0.7.0", validate_source_zip(
+        candidate_archive(baseline, "0.7.0"), expected_platform="windows", expected_version="0.7.0"))
 
     state = baseline / "windows-state"
     state.mkdir()
@@ -86,3 +71,86 @@ def test_real_candidate_prepare_and_isolated_validation(tmp_path):
         executable=str(base_executable), env=environment,
     )
     assert validation.returncode == 0, validation.stdout + validation.stderr
+
+    # Exercise real inherited Windows gate handles: even a valid registration
+    # cannot import the menu when the registering parent closes without go.
+    import msvcrt
+    import psutil
+    from litechecker.runtime_lease import _command
+    read_gate, write_gate = os.pipe()
+    handle = msvcrt.get_osfhandle(read_gate)
+    os.set_handle_inheritable(handle, True)
+    startup = subprocess.STARTUPINFO()
+    startup.lpAttributeList = {"handle_list": [handle]}
+    nonce = "d" * 32
+    gated = subprocess.Popen(_command(baseline, candidate, handle, nonce, "menu"),
+        executable=str(base_executable), env=environment, startupinfo=startup,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    UpdateStore(baseline)._atomic_json(baseline / ".updates" / f"menu-{nonce}.json",
+        dict(owner="litechecker-menu-v1", pid=gated.pid, created=psutil.Process(gated.pid).create_time(),
+             version="0.7.0", gate=handle, nonce=nonce, action="menu"))
+    os.close(read_gate)
+    os.close(write_gate)
+    stdout, stderr = gated.communicate(timeout=10)
+    assert gated.returncode == 1 and stdout == b"", stderr
+
+    # Commit an authenticated candidate through the real transaction. Runtime
+    # preparation above is real; this adapter only avoids service/network work.
+    from litechecker import updater
+    from test_platform_updates import channel, run_release, signed
+    from test_updater import Adapter
+    from test_windows_setup_flow import conversation
+    updater.initialize_channel(baseline, channel(key.public_key().public_bytes_raw(), "windows"))
+    data = candidate_archive(baseline, "0.7.0")
+    result = asyncio.run(run_release(baseline, Adapter(baseline, running=False),
+        signed(key, data, platform="windows"), data))
+    assert result["status"] == "updated", result
+    command = [sys.executable, "-I", "-B", str(baseline / "scripts/windows-app-entry.py"),
+               "menu", "--root", str(baseline)]
+    with conversation(command) as (process, expect, answer, transcript):
+        expect("MENU-0.7.0", timeout=30)
+        expect("Выберите цифру")
+        answer("0")
+        assert process.wait(timeout=10) == 0
+    assert settings.read_bytes() == before
+    assert not (state / "control/worker.json").exists()
+
+    assert not (candidate / "windows-state").exists()
+
+    # The actual public BAT prepares the bootstrap runtime and dispatches the
+    # active candidate, preserving complete prompts through PowerShell 5.1.
+    bat = baseline.parent / "LiteChecker.bat"
+    public = subprocess.run(["cmd.exe", "/d", "/c", str(bat)], input="0\n", text=True,
+        encoding="utf-8", capture_output=True, timeout=900)
+    assert public.returncode == 0, public.stdout + public.stderr
+    assert "MENU-0.7.0" in public.stdout
+    assert settings.read_bytes() == before
+
+    with conversation(command) as (process, expect, answer, transcript):
+        expect("MENU-0.7.0", timeout=30)
+        expect("Выберите цифру")
+        # Kill the stable launcher only. The actual managed menu remains alive
+        # and is retained by its own PID/creation time, not by its parent.
+        process.kill()
+        process.wait(timeout=10)
+        for version, sequence in (("0.8.0", 10), ("0.9.0", 11)):
+            data = candidate_archive(baseline, version)
+            result = asyncio.run(run_release(baseline, Adapter(baseline, running=False),
+                signed(key, data, platform="windows", version=version, sequence=sequence), data))
+            assert result["status"] == "updated", result
+        assert (candidate / "src/litechecker/windows_app.py").is_file()
+        assert xray.is_file() and python.is_file()
+        answer("0")
+        deadline = time.monotonic() + 10
+        while candidate.exists() and time.monotonic() < deadline:
+            updater.cleanup_updates(baseline)
+            time.sleep(.05)
+        assert not candidate.exists()
+    assert settings.read_bytes() == before
+    assert not (state / "control/worker.json").exists()
+
+    marker = baseline / "distribution.json"
+    marker.write_text('{"platform":"macos","schema":1}\n')
+    refused = subprocess.run(command, input="0\n", text=True, capture_output=True, timeout=30)
+    assert refused.returncode != 0
+    assert "Выберите цифру" not in refused.stdout

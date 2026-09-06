@@ -29,7 +29,7 @@ if [[ -e distribution.json || -L distribution.json || -e update-channel.json || 
     [[ -d scripts && ! -L scripts && -f scripts/install-profile.sh && ! -L scripts/install-profile.sh ]] || fail "$profile_refusal"
     # Verify the shared reader before executing it; then use the reader
     # before hashing marker/channel inputs (which might themselves be unsafe).
-    expected=$(awk '$1 == "\"scripts/install-profile.sh\":" {value=$2; gsub(/[\",]/, "", value); print value}' CONTENTS.sha256.json)
+    expected=$(awk '$1 == "\"scripts/install-profile.sh\":" {value=$2; gsub(/[",]/, "", value); print value}' CONTENTS.sha256.json)
     [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || fail "$profile_refusal"
     if command -v sha256sum >/dev/null 2>&1; then actual=$(sha256sum scripts/install-profile.sh);
     else actual=$(shasum -a 256 scripts/install-profile.sh); fi
@@ -41,7 +41,7 @@ if [[ -e distribution.json || -L distribution.json || -e update-channel.json || 
     channel_pattern='^\{"enabled":true,"manifest_urls":\["https://github\.com/[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}/releases/latest/download/release-linux\.json"\],"platform":"linux","public_key":"[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=","schema":2\}$'
     [[ "$incoming_channel" =~ $channel_pattern ]] || fail "$profile_refusal"
     for relative in distribution.json update-channel.json; do
-        expected=$(awk -v key="\"$relative\":" '$1 == key {value=$2; gsub(/[\",]/, "", value); print value}' CONTENTS.sha256.json)
+        expected=$(awk -v key="\"$relative\":" '$1 == key {value=$2; gsub(/[",]/, "", value); print value}' CONTENTS.sha256.json)
         [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || fail "$profile_refusal"
         if command -v sha256sum >/dev/null 2>&1; then actual=$(sha256sum "$relative");
         else actual=$(shasum -a 256 "$relative"); fi

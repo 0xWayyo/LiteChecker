@@ -49,6 +49,17 @@ def test_status_without_installation_state_is_read_only(tmp_path):
     assert not (root / "windows-state").exists()
 
 
+def test_corrupt_active_selector_does_not_hide_baseline_recovery_status(tmp_path):
+    control = module("windows_control")
+    root = root_at(tmp_path)
+    (root / ".updates").mkdir(mode=0o700)
+    state = root / ".updates/install.json"
+    state.write_text('{"active":"../../foreign"}')
+    state.chmod(0o600)
+    assert control.status(root) == {"state": "stopped", "version": "0.5.0"}
+    assert not (root / "windows-state").exists()
+
+
 @pytest.mark.asyncio
 async def test_live_foreign_pid_is_never_reported_running_or_stopped_by_command(tmp_path):
     control = module("windows_control")

@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -352,20 +353,29 @@ def test_mac_bad_source_profile_is_rejected_before_destination_creation(tmp_path
     assert not (tmp_path / "launch-agents").exists()
 
 
-def test_linux_prerequisite_does_not_route_to_obsolete_windows_installer(sources, tmp_path):
+@pytest.mark.parametrize("docker_available", [False, True])
+def test_linux_prerequisite_does_not_route_to_obsolete_windows_installer(sources, tmp_path, docker_available):
     _, paths = sources
     with zipfile.ZipFile(paths["linux"]) as archive:
         archive.extractall(tmp_path / "linux")
     bindir = tmp_path / "fixture-bin"
     bindir.mkdir()
+    for name in ("bash", "dirname", "awk", "find", "wc", "shasum", "hostname"):
+        (bindir / name).symlink_to(shutil.which(name))
+    if docker_available:
+        docker = bindir / "docker"
+        docker.write_text('#!/bin/sh\nexit 0\n')
+        docker.chmod(0o700)
     uname = bindir / "uname"
     uname.write_text('#!/bin/sh\nprintf "Linux\\n"\n')
     uname.chmod(0o700)
     result = subprocess.run(["/bin/bash", str(tmp_path / "linux/LiteChecker/INSTALL.sh")],
-        env={**os.environ, "PATH": str(bindir) + ":/usr/bin:/bin", "WSL_DISTRO_NAME": "Ubuntu"},
+        env={**os.environ, "PATH": str(bindir), "WSL_DISTRO_NAME": "Ubuntu"},
         stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10)
-    assert result.returncode == 2
-    assert "Docker Engine" in result.stderr
+    # A present Docker passes prerequisites and reaches the EOF-only setup;
+    # this reproduced the CI failure caused by inheriting a runner's PATH.
+    assert result.returncode == (1 if docker_available else 2), result.stdout + result.stderr
+    assert ("Docker Engine" in result.stderr) is (not docker_available)
     assert "Windows" not in result.stderr and "Docker Desktop" not in result.stderr
 
 

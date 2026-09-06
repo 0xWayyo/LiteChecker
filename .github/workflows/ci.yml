@@ -14,6 +14,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -29,16 +30,24 @@ jobs:
         run: uv sync --frozen --all-groups --all-extras
       - name: Run tests
         run: uv run --no-sync pytest
-      - name: Build public client archive
-        env:
-          PYTHONDONTWRITEBYTECODE: "1"
-        run: uv run --no-sync python scripts/package_agent.py
-      - name: Validate public client archive
-        run: >-
-          uv run --no-sync python -c
-          "from pathlib import Path;
-          from litechecker.update_store import validate_source_zip;
-          validate_source_zip(Path('dist/LiteChecker-agent.zip').read_bytes())"
+      - name: Build, extract and offline validate matching production profile
+        run: uv run --no-sync python scripts/check_release_artifacts.py --platform-smoke dist/platform-smoke
+      - name: Prepare pinned macOS native runtime without installing services
+        if: runner.os == 'macOS'
+        run: |
+          candidate="$PWD/dist/platform-smoke/public/LiteChecker"
+          bash "$candidate/scripts/native-direct.sh" --root "$candidate" prepare
+          "$candidate/.native-direct/venv/bin/python" -I -B -c 'import sys; from pathlib import Path; sys.path.insert(0,sys.argv[1]+"/src"); from litechecker.native_runtime import validate_native_runtime; print(validate_native_runtime(Path(sys.argv[1])).python)' "$candidate"
+          "$candidate/.native-direct/venv/bin/python" -I -B -m litechecker.cli --help
+      - name: Build profiled Linux image and run offline CLI
+        if: runner.os == 'Linux'
+        run: |
+          docker build --tag litechecker:profile-ci dist/platform-smoke/public/LiteChecker
+          docker run --rm --network none litechecker:profile-ci --help
+      - name: Build and check author wheel and sdist
+        run: |
+          uv build --offline --out-dir dist/author
+          uv run --no-sync python scripts/check_release_artifacts.py dist/author
   windows-native:
     runs-on: windows-latest
     timeout-minutes: 20
@@ -60,6 +69,8 @@ jobs:
         run: uv run --no-sync python tests/windows_acl_diagnostic.py
       - name: Diagnose atomic JSON replacement with a real Windows held reader
         run: uv run --no-sync python tests/windows_atomic_diagnostic.py
+      - name: Build, extract and offline validate matching Windows public wrapper
+        run: uv run --no-sync python scripts/check_release_artifacts.py --platform-smoke dist/platform-smoke
       - name: Test native runtime, process ownership, ACLs and update transactions
         if: ${{ !cancelled() && steps.native-deps.outcome == 'success' }}
         # Author-only ZIP builders run on Linux/macOS above. These tests actually
@@ -73,6 +84,7 @@ jobs:
           tests/test_windows_child_process.py
           tests/test_windows_app.py tests/test_windows_app_entry.py
           tests/test_windows_setup_flow.py
+          tests/test_active_menu.py tests/test_packaged_smoke.py
           tests/test_windows_bootstrap.py tests/test_windows_update.py
           tests/test_windows_update_storage.py tests/test_windows_update_native.py
       - name: Prepare actual pinned Windows runtime from a clean folder

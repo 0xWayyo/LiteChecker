@@ -39,6 +39,17 @@ def run(argv=None) -> int:
         if name.upper().startswith("PYTHON"):
             os.environ.pop(name, None)
     sys.path.insert(0, str(_bundled_source()))
+    if arguments[0] == "menu":
+        from litechecker.runtime_lease import launch_menu
+        import argparse
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--root", type=Path, required=True)
+        args = parser.parse_args(arguments[1:])
+        result = launch_menu(args.root.absolute(), windows=True)
+        if result is not None:
+            return result
+    # Supervisor ABI stays at the bootstrap; a worker entry belongs to its
+    # already selected release. Only menu dispatch resolves a new active UI.
     module_name, function_name = _COMMANDS[arguments.pop(0)]
     module = __import__(module_name, fromlist=[function_name])
     result = getattr(module, function_name)(arguments)

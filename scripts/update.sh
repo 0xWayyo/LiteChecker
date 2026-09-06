@@ -24,4 +24,4 @@ done
 [[ -f "$current" && -x "$current" ]] || { printf '%s\n' 'updater-python-unsafe' >&2; exit 1; }
 directory=$(cd -- "$(dirname -- "$current")" && pwd -P)
 case "$directory/$(basename -- "$current")" in "$runtime"/*) ;; *) printf '%s\n' 'updater-python-unsafe' >&2; exit 1;; esac
-exec "$python" "$root/src/litechecker/update_launcher.py" --root "$root" "${@:-status}"
+exec "$python" -I -B "$root/src/litechecker/update_launcher.py" --root "$root" "${@:-status}"
