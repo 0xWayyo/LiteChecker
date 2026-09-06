@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import secrets
@@ -30,9 +31,11 @@ from litechecker.models import (
     TargetConfig,
 )
 from litechecker.probe import ControlResult, check_control, probe_all
+from litechecker.recheck import confirm_failures
 from litechecker.state import (
     SequenceStore,
     SnapshotStore,
+    _atomic_write_json,
 )
 from litechecker.subscription import parse_xray_subscription
 
@@ -217,14 +220,16 @@ class MeasurementDependencies:
     boot_id: str
     parser: Parser = parse_xray_subscription
     version_checker: XrayVersionChecker | None = None
+    attempts_path: Path | None = None
 
 
 async def measure_cycle(
     settings: ProbeSettings,
     dependencies: MeasurementDependencies,
 ) -> AgentReport:
-    """Refresh and measure once; only snapshot and sequence state are persisted."""
+    """Refresh and measure once, persisting snapshot, sequence and local attempts."""
     started = dependencies.monotonic()
+    attempts: list[dict] = []
     observed_at = _utc(dependencies.wall_clock())
     control = await _run_control(
         dependencies.control_checker,
@@ -308,9 +313,21 @@ async def measure_cycle(
                 remaining,
                 dependencies.prober,
             )
-            run_status, run_reason = _reconcile_run_status(
-                results, run_status, run_reason
-            )
+        async def reprobe(targets, retry_control, budget):
+            return await _run_probes(targets, retry_control, budget, dependencies.prober)
+
+        async def recontrol(budget):
+            return await _run_control(dependencies.control_checker, budget)
+
+        results, final_control, attempts = await confirm_failures(
+            snapshot.targets, results, control, probe=reprobe, check_control=recontrol,
+            remaining=lambda: _remaining(settings.run_deadline_seconds, started, dependencies.monotonic),
+            sleep=dependencies.sleep,
+        )
+        if not final_control.ok:
+            report_control_status = ResultStatus.UNKNOWN
+            run_status, run_reason = ResultStatus.UNKNOWN, "agent-network"
+        run_status, run_reason = _reconcile_run_status(results, run_status, run_reason)
         revision = snapshot.subscription_revision
         snapshot_age = _snapshot_age(observed_at, snapshot)
 
@@ -336,6 +353,16 @@ async def measure_cycle(
         duration_ms=duration_ms,
         xray_version=xray_info.version,
     )
+    if dependencies.attempts_path is not None:
+        try:
+            await state_call(_atomic_write_json, dependencies.attempts_path, {
+                "event_id": report.event_id,
+                "observed_at": observed_at.isoformat(),
+                "subscription_revision": revision,
+                "attempts": attempts,
+            })
+        except Exception:
+            logging.getLogger(__name__).warning("probe-attempts-store-failed")
     return report
 
 
@@ -383,6 +410,7 @@ def make_measurement_dependencies(
         sleep=asyncio.sleep,
         boot_id=str(uuid.uuid4()),
         version_checker=version_checker,
+        attempts_path=state_dir / "last-probe-attempts.json",
     )
 
 
@@ -409,6 +437,8 @@ async def _run_probes(
     if prober is None:
         return _unknown_results(targets, ProbeStage.XRAY, "probe-error")
     try:
+        # The batch owns its deadline and returns completed evidence after
+        # joining cancelled workers. An outer wait_for would erase that evidence.
         return await prober(targets, control, deadline)
     except TimeoutError:
         return _unknown_results(targets, ProbeStage.DEADLINE, "deadline")

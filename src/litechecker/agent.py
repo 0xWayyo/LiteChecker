@@ -61,6 +61,7 @@ class AgentDependencies:
     version_checker: XrayVersionChecker | None = None
     ack_store: CollectorAckStore | None = None
     last_accepted_event_id: str | None = None
+    attempts_path: Path | None = None
 
 
 Dependencies = AgentDependencies

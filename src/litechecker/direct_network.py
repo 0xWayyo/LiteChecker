@@ -15,6 +15,8 @@ import dns.rcode
 import dns.rdataclass
 import dns.rdatatype
 
+from litechecker.probe_policy import DNS_TIMEOUT_SECONDS
+
 
 class DirectNetworkUnavailable(RuntimeError):
     """The requested direct path could not be established safely."""
@@ -153,7 +155,7 @@ class TCPDirectNetwork:
         payload = query.to_wire()
         writer = None
         try:
-            async with asyncio.timeout(3):
+            async with asyncio.timeout(DNS_TIMEOUT_SECONDS):
                 resolver = str(_numeric(self.dns_servers[0], infrastructure=True))
                 reader, writer = await self._connect_ip(resolver, 53, infrastructure=True)
                 writer.write(len(payload).to_bytes(2, "big") + payload)

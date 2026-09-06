@@ -22,6 +22,7 @@ import psutil
 
 from litechecker.models import ProbeResult, ProbeStage, ResultStatus, TargetConfig
 from litechecker.security import is_forbidden_ip
+from litechecker.probe_policy import PROBE_TIMEOUT_SECONDS, TCP_TIMEOUT_SECONDS
 
 
 @dataclass(frozen=True)
@@ -190,7 +191,7 @@ class XrayTunnel:
         process: XrayProcess,
         *,
         canaries: Sequence[Canary] = DEFAULT_CANARIES,
-        timeout: float = 12.0,
+        timeout: float = PROBE_TIMEOUT_SECONDS,
         client_factory: Callable[..., Any] = httpx.AsyncClient,
         verify: ssl.SSLContext | bool = True,
     ):
@@ -401,8 +402,8 @@ async def probe_target(
     tls: TlsDiagnostic | None = None,
     tunnel: TunnelProbe | None = None,
     allow_private_targets: bool = False,
-    tcp_timeout: float = 3.0,
-    probe_timeout: float = 12.0,
+    tcp_timeout: float = TCP_TIMEOUT_SECONDS,
+    probe_timeout: float = PROBE_TIMEOUT_SECONDS,
     xray_binary: str | PathLike[str] = "xray",
     canaries: Sequence[Canary] = DEFAULT_CANARIES,
 ) -> ProbeResult:
@@ -636,8 +637,8 @@ async def probe_all(
     tls: TlsDiagnostic | None = None,
     tunnel: TunnelProbe | None = None,
     allow_private_targets: bool = False,
-    tcp_timeout: float = 3.0,
-    probe_timeout: float = 12.0,
+    tcp_timeout: float = TCP_TIMEOUT_SECONDS,
+    probe_timeout: float = PROBE_TIMEOUT_SECONDS,
     xray_binary: str | PathLike[str] = "xray",
     canaries: Sequence[Canary] = DEFAULT_CANARIES,
 ) -> list[ProbeResult]:

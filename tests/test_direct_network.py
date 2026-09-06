@@ -470,6 +470,30 @@ async def test_dns_internal_timeout_preserves_cause_and_closes_stream_without_fa
 
 
 @pytest.mark.asyncio
+async def test_slow_bound_dns_connection_gets_six_seconds(monkeypatch):
+    import dns.message
+    import dns.rrset
+    from litechecker.macos_network import MacDirectNetwork
+
+    direct = network(monkeypatch)
+    def response(query):
+        answer = dns.message.make_response(query)
+        if query.question[0].rdtype == 1:
+            answer.answer.append(dns.rrset.from_text("example.com.", 30, "IN", "A", "8.8.8.8"))
+        return answer
+    async with dns_fixture(monkeypatch, direct, response) as (requests, finished):
+        connect = MacDirectNetwork._connect_ip
+        timeout = asyncio.timeout
+        monkeypatch.setattr(asyncio, "timeout", lambda seconds: timeout(seconds / 10))
+        async def slow(self, *args, **kwargs):
+            await asyncio.sleep(0.4)
+            return await connect(self, *args, **kwargs)
+        monkeypatch.setattr(MacDirectNetwork, "_connect_ip", slow)
+        assert await direct.resolve("example.com") == ["8.8.8.8"]
+        assert len(requests) == 2
+
+
+@pytest.mark.asyncio
 async def test_dns_allows_one_empty_family_but_does_not_cache(monkeypatch):
     import dns.message
     import dns.rdatatype

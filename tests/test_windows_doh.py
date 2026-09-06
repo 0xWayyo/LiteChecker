@@ -97,6 +97,23 @@ async def test_windows_resolution_uses_bound_https_not_blocked_adapter_dns(monke
 
 
 @pytest.mark.asyncio
+async def test_slow_doh_connection_gets_six_seconds_without_fallback(monkeypatch):
+    # Scale only deadline timers: a 4-second dial must fit the new DNS budget.
+    peer = Peer()
+    network = peer.install(monkeypatch)
+    connect = WindowsDirectNetwork._connect_ip
+    timeout = asyncio.timeout
+    monkeypatch.setattr(asyncio, "timeout", lambda seconds: timeout(seconds / 10))
+    async def slow(self, *args, **kwargs):
+        await asyncio.sleep(0.4)
+        return await connect(self, *args, **kwargs)
+    monkeypatch.setattr(WindowsDirectNetwork, "_connect_ip", slow)
+    assert await network.resolve("ipinfo.io") == ["34.117.59.81"]
+    assert len(peer.connections) == 2
+    assert all(writer.closed for writer in peer.writers)
+
+
+@pytest.mark.asyncio
 async def test_ipv6_only_uses_numeric_ipv6_doh_bootstrap(monkeypatch):
     peer = Peer(sources=("2606:4700::abcd",))
     network = peer.install(monkeypatch)

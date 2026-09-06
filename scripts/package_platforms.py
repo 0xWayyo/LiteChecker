@@ -24,7 +24,7 @@ COMMON_MODULES = (
     "direct_check.py", "direct_network.py", "direct_observation.py", "direct_outbox.py",
     "direct_relay.py", "direct_reporting.py", "direct_service.py", "direct_subscription.py",
     "distribution.py", "maintenance.py", "measurement.py", "models.py", "network_identity.py",
-    "platform_security.py", "probe.py", "protocol.py", "runtime.py", "security.py",
+    "platform_security.py", "probe.py", "probe_policy.py", "recheck.py", "protocol.py", "runtime.py", "security.py",
     "standalone.py", "state.py", "subscription.py", "telegram_proxy.py", "terminal_ui.py",
     "update_launcher.py", "runtime_lease.py", "update_manifest.py", "update_store.py", "updater.py",
 )

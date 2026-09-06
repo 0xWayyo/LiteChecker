@@ -17,6 +17,7 @@ from filelock import FileLock
 from litechecker.collector.auth import AgentIdentity
 from litechecker.security import is_valid_agent_id, is_valid_agent_token
 from litechecker.state import _atomic_write_json
+from litechecker.probe_policy import PROBE_TIMEOUT_SECONDS, TCP_TIMEOUT_SECONDS
 
 
 _MAX_FILE_VALUE_BYTES = 65_536
@@ -103,8 +104,8 @@ class ProbeSettings(BaseModel):
     state_key: SecretStr = Field(min_length=32)
     interval_seconds: int = Field(default=600, ge=1)
     run_deadline_seconds: int = Field(default=480, ge=1)
-    probe_timeout_seconds: int = Field(default=12, ge=1)
-    tcp_timeout_seconds: int = Field(default=3, ge=1)
+    probe_timeout_seconds: int = Field(default=PROBE_TIMEOUT_SECONDS, ge=1)
+    tcp_timeout_seconds: int = Field(default=TCP_TIMEOUT_SECONDS, ge=1)
     max_concurrency: int = Field(default=4, ge=1)
     max_subscription_bytes: int = Field(default=5_242_880, ge=1)
     max_endpoints: int = Field(default=2_000, ge=1)
@@ -138,8 +139,8 @@ class ProbeSettings(BaseModel):
             state_key=_value_from_env("LC_STATE_KEY", env),
             interval_seconds=env.get("LC_INTERVAL_SECONDS", 600),
             run_deadline_seconds=env.get("LC_RUN_DEADLINE_SECONDS", 480),
-            probe_timeout_seconds=env.get("LC_PROBE_TIMEOUT_SECONDS", 12),
-            tcp_timeout_seconds=env.get("LC_TCP_TIMEOUT_SECONDS", 3),
+            probe_timeout_seconds=env.get("LC_PROBE_TIMEOUT_SECONDS", PROBE_TIMEOUT_SECONDS),
+            tcp_timeout_seconds=env.get("LC_TCP_TIMEOUT_SECONDS", TCP_TIMEOUT_SECONDS),
             max_concurrency=env.get("LC_MAX_CONCURRENCY", 4),
             max_subscription_bytes=env.get("LC_MAX_SUBSCRIPTION_BYTES", 5_242_880),
             max_endpoints=env.get("LC_MAX_ENDPOINTS", 2_000),

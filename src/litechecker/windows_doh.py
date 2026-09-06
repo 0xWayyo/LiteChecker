@@ -18,9 +18,10 @@ import dns.rdatatype
 import h11
 
 from .direct_network import DirectNetworkUnavailable, _dns_answers, _numeric
+from .probe_policy import DNS_TIMEOUT_SECONDS
 
 
-_TIMEOUT = 3
+_TIMEOUT = DNS_TIMEOUT_SECONDS
 _BODY_LIMIT = 65535
 _HEADER_LIMIT = 8192
 _WIRE_LIMIT = 98304
@@ -34,7 +35,7 @@ def _tls_context():
 
 
 async def request(network, address: str, hostname: str, path: str, *, accept: str) -> bytes:
-    """One validated HTTPS GET to a numeric public IP; at most 3s + 0.25s close."""
+    """One validated HTTPS GET to a numeric public IP; bounded DNS budget plus close."""
     address = str(_numeric(address))
     # This is a control-path primitive, not an arbitrary URL fetcher.
     if not (
