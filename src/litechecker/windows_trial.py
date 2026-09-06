@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import getpass
 import json
 import os
 import sys
@@ -16,6 +15,7 @@ from urllib.parse import urlsplit
 from filelock import AsyncFileLock
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
+from litechecker.atomic_io import atomic_replace
 from litechecker.collector.auth import AgentIdentity
 from litechecker.collector.reporting import chunk_message
 from litechecker.collector.telegram import TelegramClient
@@ -127,15 +127,15 @@ def configure(root: Path, *, telegram=False) -> None:
     print("Настройки хранятся только в windows-state рядом с программой. Не пересылайте эту папку.")
     if telegram:
         values.update(
-            telegram_bot_token=getpass.getpass("Токен Telegram-бота (скрытый ввод): ").strip(),
+            telegram_bot_token=input("Токен Telegram-бота: ").strip(),
             telegram_chat_id=input("ID чата: ").strip(),
         )
-        proxy = getpass.getpass("Прокси Telegram, socks5://login:password@host:port (Enter — без него): ").strip()
+        proxy = input("Прокси Telegram (Enter — без него): ").strip()
         values.pop("telegram_proxy_url", None)
         if proxy:
             values["telegram_proxy_url"] = proxy
     if not telegram or not values.get("subscription_url"):
-        values["subscription_url"] = getpass.getpass("Ссылка подписки HTTPS (скрытый ввод): ").strip()
+        values["subscription_url"] = input("Ссылка подписки HTTPS: ").strip()
     save_configuration(root, values)
 
 
@@ -146,7 +146,7 @@ def _save_text(state: Path, text: str, *, name="last-report.txt") -> None:
             stream.write(text + "\n")
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, state / name)
+        atomic_replace(temporary, state / name)
     finally:
         Path(temporary).unlink(missing_ok=True)
 

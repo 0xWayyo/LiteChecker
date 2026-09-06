@@ -18,6 +18,7 @@ from typing import Any
 from filelock import FileLock, Timeout
 from pydantic import ValidationError
 
+from litechecker.atomic_io import atomic_replace
 from litechecker.models import Snapshot, SnapshotDiff, TargetConfig
 
 
@@ -495,7 +496,7 @@ def _atomic_write_json(path: Path, value: Mapping[str, Any]) -> None:
             file.write(encoded)
             file.flush()
             os.fsync(file.fileno())
-        os.replace(temporary_path, path)
+        atomic_replace(temporary_path, path)
         _fsync_directory(path.parent)
     except OSError as exc:
         try:

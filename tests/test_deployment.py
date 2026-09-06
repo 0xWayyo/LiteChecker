@@ -127,12 +127,14 @@ def test_container_explicitly_installs_the_collector_dependency_extra():
     assert "--extra collector" in sync
 
 
-def test_web_stack_is_an_explicit_collector_extra_and_version_is_candidate():
+def test_web_stack_is_an_explicit_collector_extra_and_lock_version_agrees():
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
         "project"
     ]
 
-    assert project["version"] == "0.5.0"
+    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
+    installed = next(package for package in lock["package"] if package["name"] == "litechecker")
+    assert installed["version"] == project["version"]
     assert not {"fastapi", "uvicorn"} & {
         requirement.split("[", 1)[0].split("=", 1)[0].split("<", 1)[0]
         for requirement in project["dependencies"]

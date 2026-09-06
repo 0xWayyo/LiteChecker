@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import getpass
 import json
 import os
 import re
@@ -69,7 +68,9 @@ def _is_interactive() -> bool:
 
 
 def _prompt(label: str, *, secret: bool) -> str:
-    return getpass.getpass(label) if secret else input(label)
+    # `secret` classifies the setting for callers; typing is intentionally
+    # visible. Let the terminal echo it, without printing values into logs.
+    return input(label)
 
 
 def _private_directory(path: Path, *, required: bool) -> None:
@@ -304,11 +305,11 @@ def _status(value: str | None) -> str:
 def _collect(current: _Loaded, *, require_explicit_chat: bool) -> _Loaded:
     subscription = _entered(current.subscription, _prompt(
         f"URL подписки (сейчас: {_status(current.subscription)}) "
-        "[Enter — оставить текущий, ввод скрыт]: ", secret=True
+        "[Enter — оставить текущий]: ", secret=True
     ), removable=False)
     token = _entered(current.token, _prompt(
         f"Токен Telegram-бота (сейчас: {_status(current.token)}) "
-        "[Enter — оставить текущий, ввод скрыт]: ", secret=True
+        "[Enter — оставить текущий]: ", secret=True
     ), removable=False)
     shown_chat = current.chat if _valid_chat(current.chat) else "не задан"
     entered_chat = _prompt(
@@ -318,7 +319,7 @@ def _collect(current: _Loaded, *, require_explicit_chat: bool) -> _Loaded:
     chat = _entered(current.chat, entered_chat, removable=False)
     proxy = _entered(current.proxy, _prompt(
         f"Прокси Telegram (сейчас: {_status(current.proxy)}; формат: https/http/socks5 URL) "
-        "[Enter — оставить, - — удалить, ввод скрыт]: ", secret=True
+        "[Enter — оставить, - — удалить]: ", secret=True
     ), removable=True)
     entered_name = _prompt(
         "Название устройства [Enter — оставить, - — авто]: ", secret=False

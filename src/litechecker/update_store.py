@@ -18,6 +18,7 @@ import uuid
 import zipfile
 
 from .update_manifest import SHA256_RE, VERSION_RE
+from .atomic_io import atomic_replace
 from . import windows_security
 
 
@@ -401,7 +402,7 @@ class UpdateStore:
                 output.write(payload)
                 output.flush()
                 os.fsync(output.fileno())
-            os.replace(temporary, path)
+            atomic_replace(temporary, path)
             if windows_security.is_windows():
                 windows_security.assert_private_file(path)
             else:

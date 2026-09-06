@@ -549,12 +549,11 @@ def native_application(tmp_path, *, observe_sharing=False):
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(sys.platform != "win32", reason="requires actual Windows CRT sharing and supervisor lifecycle")
-async def test_native_characterizes_held_status_reader_aborting_real_supervisor_publish(tmp_path, monkeypatch):
-    """A genuine CRT reader reproduces the fatal publish race, not a fake error.
+async def test_native_supervisor_recovers_after_real_status_reader_sharing_conflict(tmp_path, monkeypatch):
+    """A real CRT reader must not permanently abort the owned supervisor.
 
-    The parent releases the handle only after the child observes a real sharing
-    error. When bounded replacement recovery is implemented, change the expected
-    failed Start below to started and retain this exact native handshake.
+    Release the handle only after the child observes a genuine replacement
+    error, then require real readiness and cleanup without retrying Start.
     """
     control = module("windows_control")
     root = native_application(tmp_path, observe_sharing=True)
@@ -591,22 +590,43 @@ async def test_native_characterizes_held_status_reader_aborting_real_supervisor_
             observed = json.loads(event.read_text(encoding="utf-8"))
         assert observed is not None and set(observed) == {"winerror"} and observed["winerror"] in {5, 32, 33}, {"observed": observed,
             "completed": starting.done(), "returncodes": [process.poll() for process in launches]}
+        assert path.read_bytes() == before, "a blocked publish must preserve the previous complete record"
         os.close(reader)
         reader = None
         result = await asyncio.wait_for(starting, 30)
         chain = json.loads(fault.read_text(encoding="utf-8")) if fault.exists() else []
-        assert result["status"] == "failed", {"result": result, "fault": chain}
-        assert any(item["type"] == "StateError" for item in chain), chain
-        assert any(item.get("winerror") == observed["winerror"] for item in chain), chain
-        frames = {frame for item in chain for frame in item["frames"]}
-        assert "windows_control.py:_publish" in frames and "state.py:_atomic_write_json" in frames, chain
-        assert len(launches) == 1 and launches[0].poll() == 1
-        assert path.read_bytes() == before
-        assert not (root / "windows-state/control/worker.json").exists()
-        assert not (root / "windows-state/controlled-child.txt").exists()
-        # The same controlled record is writable once the real reader closes.
-        control.write_record(root, "supervisor.json", json.loads(before))
-        assert json.loads(path.read_bytes()) == json.loads(before)
+        assert result["status"] == "started", {"result": result, "fault": chain, "observed": observed}
+        assert not chain, chain
+        assert len(launches) == 1 and launches[0].poll() is None
+        supervisor_pid = launches[0].pid
+        assert result["pid"] == supervisor_pid
+        assert json.loads(path.read_bytes())["pid"] == supervisor_pid
+        worker = control.read_record(root, "worker.json")
+        assert worker and worker.get("phase") == "ready" and control._process_matches(root, worker, "worker")
+        assert control.status(root)["state"] == "running"
+        duplicate = await control.start(root)
+        assert duplicate["status"] == "already-running" and duplicate["pid"] == supervisor_pid, duplicate
+        assert len(launches) == 1
+        child_file = root / "windows-state/controlled-child.txt"
+        child_pid = None
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                child_pid = int(child_file.read_text())
+                break
+            except (FileNotFoundError, ValueError):
+                await asyncio.sleep(0.02)
+        assert child_pid is not None and psutil.pid_exists(child_pid)
+        supervisor = psutil.Process(supervisor_pid)
+        owned = [supervisor, *supervisor.children(recursive=True)]
+        assert {worker["pid"], child_pid}.issubset({process.pid for process in owned})
+        stopped = await control.stop(root)
+        assert stopped["status"] == "stopped", stopped
+        deadline = time.monotonic() + 10
+        while any(process.is_running() for process in owned) and time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
+        assert not any(process.is_running() for process in owned), "owned process tree survived Stop"
+        assert control.status(root)["state"] == "stopped"
     finally:
         if reader is not None:
             os.close(reader)

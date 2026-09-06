@@ -58,7 +58,7 @@ def test_real_isolated_entry_normalizes_redirected_ansi_streams_before_onboardin
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "┌─ LiteChecker Windows" in result.stdout.decode("utf-8")
-    assert "Ссылка подписки HTTPS" in result.stderr.decode("utf-8")
+    assert "Ссылка подписки HTTPS: " in result.stdout.decode("utf-8")
     assert b"https://subscription.invalid/test" not in result.stdout + result.stderr
     assert (tmp_path / "windows-state" / "settings.json").is_file()
 
@@ -169,7 +169,7 @@ def test_subscription_menu_preserves_telegram_secrets(tmp_path, monkeypatch):
         "telegram_bot_token": token,
         "telegram_chat_id": "12345",
     })
-    monkeypatch.setattr("litechecker.windows_trial.getpass.getpass", lambda _prompt: "https://new.example/sub")
+    monkeypatch.setattr("builtins.input", lambda _prompt: "https://new.example/sub")
     controls = FakeControls([{"state": "stopped"}] * 4)
 
     run_menu(tmp_path, controls=controls, input_fn=answers("3", "1", "0", "0"), output_fn=lambda _line: None)

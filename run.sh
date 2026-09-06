@@ -60,13 +60,11 @@ setup() {
         [[ ! -L "$item" ]] || die "Символическая ссылка недопустима: $item"
     done
     if [[ ! -s secrets/telegram_bot_token ]]; then
-        read -r -s -p 'Общий токен Telegram-бота (ввод скрыт): ' token
-        printf '\n'
+        read -r -p 'Общий токен Telegram-бота: ' token
         [[ -n "$token" ]] || die 'Токен не может быть пустым.'
     fi
     if [[ ! -s secrets/subscription_url ]]; then
-        read -r -s -p 'URL подписки (ввод скрыт): ' subscription
-        printf '\n'
+        read -r -p 'URL подписки: ' subscription
         [[ "$subscription" == https://* ]] || die 'URL подписки должен начинаться с https://'
     fi
     mkdir -p secrets state/standalone

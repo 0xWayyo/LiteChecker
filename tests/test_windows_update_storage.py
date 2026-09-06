@@ -360,3 +360,80 @@ def test_native_windows_mode700_owner_rights_acl_is_validated_without_rewrite(tm
     assert windows_security.assert_private_directory(child) == child
     assert windows_security.assert_private_file(file) == file
     assert {path: windows_security._read_directory_acl(path) for path in (child, file)} == before
+
+
+@pytest.mark.skipif(os.name != "nt", reason="actual Windows deny-delete replacement boundary")
+@pytest.mark.parametrize("kind", ["state", "updater", "report"])
+@pytest.mark.parametrize("release_reader", [True, False], ids=["transient", "persistent"])
+def test_native_atomic_writers_recover_or_fail_bounded_without_data_loss(tmp_path, monkeypatch, kind, release_reader):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    import time
+
+    from litechecker import state, windows_trial
+    from test_windows_update_native import _deny_delete
+    from windows_test_support import secure_test_directory
+
+    root = tmp_path.resolve(strict=True) / "private atomic writes"
+    root.mkdir()
+    secure_test_directory(root)
+    if kind == "state":
+        path = root / "control.json"
+        write = lambda value: state._atomic_write_json(path, {"phase": value})
+        expected = {"phase": "updated"}
+    elif kind == "updater":
+        store = update_store.UpdateStore(root)
+        path = store.install_path
+        write = lambda value: store.write_install({**update_store.default_install_state(), "status": value})
+        expected = {**update_store.default_install_state(), "status": "updated"}
+    else:
+        path = root / "last-report.txt"
+        write = lambda value: windows_trial._save_text(root, value)
+        expected = b"updated\n"
+    write("current")
+    old = path.read_bytes()
+    before = set(path.parent.iterdir())
+    first_failure = threading.Event()
+    attempts, failures = [], []
+    replace = os.replace
+
+    def observe_real_replace(source, destination):
+        # Observe, never synthesize, the actual NTFS failure and recovery.
+        attempts.append((Path(source), Path(destination)))
+        try:
+            return replace(source, destination)
+        except OSError as error:
+            failures.append(getattr(error, "winerror", None))
+            first_failure.set()
+            raise
+
+    monkeypatch.setattr(os, "replace", observe_real_replace)
+    started = time.monotonic()
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with _deny_delete(path):
+            future = executor.submit(write, "updated")
+            assert first_failure.wait(3), "writer never reached the held-file replacement"
+            assert failures[0] in (5, 32, 33), failures
+            assert path.read_bytes() == old
+            if not release_reader:
+                with pytest.raises((OSError, state.StateError)) as caught:
+                    future.result(timeout=3)
+                error = caught.value
+                while error.__cause__ is not None:
+                    error = error.__cause__
+                assert getattr(error, "winerror", None) in (5, 32, 33)
+                assert path.read_bytes() == old
+                assert set(path.parent.iterdir()) == before
+        if release_reader:
+            future.result(timeout=3)
+    assert time.monotonic() - started < 3
+    assert len(attempts) > 1
+    assert len(set(attempts)) == 1, "retry must reuse the same closed temporary file"
+    assert all(code in (5, 32, 33) for code in failures)
+    assert set(path.parent.iterdir()) == before
+    if not release_reader:
+        # A persistent held reader is not mistaken for a completed write.
+        assert path.read_bytes() == old
+        write("updated")
+    actual = path.read_bytes() if kind == "report" else json.loads(path.read_bytes())
+    assert actual == expected

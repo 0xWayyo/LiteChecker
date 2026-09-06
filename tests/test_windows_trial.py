@@ -1,5 +1,7 @@
 """Experimental Windows path must never silently reuse macOS/ambient defaults."""
 
+import getpass
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -68,6 +70,40 @@ def test_windows_configuration_rejects_unsafe_input_without_printing_secrets(tmp
             save_configuration(tmp_path, payload)
         assert "private" not in str(error.value)
     assert not (tmp_path / "windows-state" / "settings.json").exists()
+
+
+def test_windows_configuration_uses_visible_input_without_redisplaying_values(tmp_path, monkeypatch, capsys):
+    from litechecker import windows_trial
+
+    subscription = "https://subscription.invalid/private"
+    token = "123456:" + "A" * 30
+    proxy = "socks5://user:private-password@proxy.invalid:1080"
+    responses = iter((token, "12345", proxy, subscription))
+    prompts = []
+
+    def visible_input(prompt):
+        prompts.append(prompt)
+        return next(responses)
+
+    monkeypatch.setattr("builtins.input", visible_input)
+    monkeypatch.setattr(getpass, "getpass", lambda _prompt: pytest.fail("Windows input must be visible"))
+    windows_trial.configure(tmp_path, telegram=True)
+
+    assert prompts == [
+        "Токен Telegram-бота: ",
+        "ID чата: ",
+        "Прокси Telegram (Enter — без него): ",
+        "Ссылка подписки HTTPS: ",
+    ]
+    assert json.loads((tmp_path / "windows-state" / "settings.json").read_bytes()) == {
+        "subscription_url": subscription,
+        "telegram_bot_token": token,
+        "telegram_chat_id": "12345",
+        "telegram_proxy_url": proxy,
+    }
+    output = capsys.readouterr().out
+    assert "скрыт" not in output
+    assert all(value not in output for value in (subscription, token, proxy))
 
 
 def test_windows_cli_rejects_non_windows_before_setup_or_network(tmp_path, monkeypatch, capsys):
