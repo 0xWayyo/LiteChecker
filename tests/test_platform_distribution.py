@@ -97,6 +97,43 @@ def test_platform_inventory_channels_dependencies_and_shared_bytes(sources):
                 assert trees[left][name] == trees[right][name], name
 
 
+@pytest.mark.parametrize("line_ending", [b"\r\n", b"mixed"])
+def test_runtime_profile_preserves_pins_hashes_and_bytes_across_checkout_line_endings(tmp_path, monkeypatch, line_ending):
+    builder = script("package_platforms")
+    expected = builder._runtime_metadata("0.6.0")
+    project = (ROOT / "pyproject.toml").read_bytes().replace(b"\r\n", b"\n")
+    lock = (ROOT / "uv.lock").read_bytes().replace(b"\r\n", b"\n")
+    (tmp_path / "pyproject.toml").write_bytes(project.replace(b"\n", b"\r\n"))
+    if line_ending == b"mixed":
+        lock = lock.replace(b"[[package]]\n", b"[[package]]\r\n")
+    else:
+        lock = lock.replace(b"\n", line_ending)
+    (tmp_path / "uv.lock").write_bytes(lock)
+    monkeypatch.setattr(builder, "ROOT", tmp_path)
+    actual = builder._runtime_metadata("0.6.0")
+    assert actual == expected
+    assert b"\r" not in actual["uv.lock"]
+    locked = {item["name"]: item for item in tomllib.loads(lock.decode())["package"]}
+    for item in tomllib.loads(actual["uv.lock"].decode())["package"]:
+        assert item["version"] == locked[item["name"]]["version"]
+        for artifact in ("sdist", "wheels"):
+            assert item.get(artifact) == locked[item["name"]].get(artifact)
+
+
+def test_crlf_runtime_lock_still_rejects_missing_allowed_dependency(tmp_path, monkeypatch):
+    builder = script("package_platforms")
+    (tmp_path / "pyproject.toml").write_bytes((ROOT / "pyproject.toml").read_bytes())
+    lock = (ROOT / "uv.lock").read_bytes().replace(b"\r\n", b"\n")
+    # Removing the required record must not become tolerated by normalization.
+    header, *blocks = lock.split(b"[[package]]\n")
+    lock = header + b"".join(b"[[package]]\n" + block for block in blocks
+                             if not block.startswith(b'name = "cryptography"\n'))
+    (tmp_path / "uv.lock").write_bytes(lock.replace(b"\n", b"\r\n"))
+    monkeypatch.setattr(builder, "ROOT", tmp_path)
+    with pytest.raises(ValueError, match="runtime lock allowlist is incomplete"):
+        builder._runtime_metadata("0.6.0")
+
+
 @pytest.mark.parametrize("platform", ["windows", "macos", "linux"])
 def test_extracted_profile_runs_entry_imports_and_lock_is_current(sources, tmp_path, platform):
     _, paths = sources

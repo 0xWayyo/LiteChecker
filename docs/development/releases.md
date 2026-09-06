@@ -26,7 +26,7 @@ CI выполняет `uv run --no-sync python scripts/check_release_artifacts.p
 --platform-smoke dist/platform-smoke`: все профили собираются одним снимком,
 сверяются общие байты и проверяются target/version/CONTENTS, затем импортируются
 только файлы распакованного пакета текущей ОС. macOS готовит закреплённый runtime
-командой `native-direct.sh --root CANDIDATE prepare` без установки launchd.
+командой `native-direct.sh prepare --root CANDIDATE` без установки launchd.
 Linux собирает Dockerfile именно из профиля и запускает CLI с `--network none`.
 Windows проверяет настоящий публичный BAT, полный ввод PowerShell и подготовку
 закреплённого Python/Xray из `_app`. Wheel/sdist остаются отдельным авторским gate.

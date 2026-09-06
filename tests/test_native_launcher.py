@@ -106,6 +106,19 @@ def prepared_control(tmp_path):
     return script, root, env, command_log, calls
 
 
+def test_ci_prepare_command_runs_existing_native_cli_without_starting_service(tmp_path):
+    script, root, env, command_log, _ = prepared_control(tmp_path)
+    (root / "scripts").mkdir()
+    shutil.copy2(script, root / "scripts/native-direct.sh")
+    make_script(root / ".native-direct/uv", 'printf "uv:%s\\n" "$*" >> "$COMMAND_LOG"\n')
+    env["candidate"] = str(root)
+    command = next(line.strip() for line in (SOURCE / ".github/workflows/ci.yml").read_text().splitlines()
+                   if line.strip().startswith('bash "$candidate/scripts/native-direct.sh"'))
+    result = subprocess.run([BASH, "-c", command], env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert command_log.read_text().splitlines() == ["uv:sync --frozen --no-dev --python 3.12.11"]
+
+
 @pytest.mark.parametrize("action", ["start", "stop"])
 def test_native_controls_delegate_to_transactional_updater_when_installed(tmp_path, action):
     script, root, env, command_log, python_log = prepared_control(tmp_path)

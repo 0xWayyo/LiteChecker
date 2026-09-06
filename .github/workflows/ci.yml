@@ -36,7 +36,7 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           candidate="$PWD/dist/platform-smoke/public/LiteChecker"
-          bash "$candidate/scripts/native-direct.sh" --root "$candidate" prepare
+          bash "$candidate/scripts/native-direct.sh" prepare --root "$candidate"
           "$candidate/.native-direct/venv/bin/python" -I -B -c 'import sys; from pathlib import Path; sys.path.insert(0,sys.argv[1]+"/src"); from litechecker.native_runtime import validate_native_runtime; print(validate_native_runtime(Path(sys.argv[1])).python)' "$candidate"
           "$candidate/.native-direct/venv/bin/python" -I -B -m litechecker.cli --help
       - name: Build profiled Linux image and run offline CLI

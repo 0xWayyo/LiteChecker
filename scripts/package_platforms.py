@@ -77,7 +77,9 @@ def _runtime_metadata(version: str) -> dict[str, bytes]:
         '[build-system]\nrequires = ["hatchling>=1.27"]\nbuild-backend = "hatchling.build"\n\n'
         '[tool.hatch.build.targets.wheel]\npackages = ["src/litechecker"]\nonly-packages = true\n'
     ).encode()
-    lock_text = _read("uv.lock").decode()
+    # Git may check out TOML using CRLF on Windows. Canonicalize newline
+    # framing before selecting records; preserve every pin and artifact hash.
+    lock_text = _read("uv.lock").decode().replace("\r\n", "\n")
     header, *blocks = lock_text.split("[[package]]\n")
     selected = {}
     for block in blocks:

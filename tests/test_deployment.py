@@ -785,7 +785,7 @@ def test_ci_is_hermetic_pinned_and_validates_public_package_on_linux_and_macos()
     assert all(re.fullmatch(r"[^@]+@[0-9a-f]{40}", value) for value in uses)
     assert "scripts/check_release_artifacts.py --platform-smoke" in body
     assert "--network none" in body
-    assert "--root \"$candidate\" prepare" in body
+    assert "prepare --root \"$candidate\"" in body
     assert "test_windows_bootstrap_runtime.py" in body
     assert not re.search(r"\b(secrets|sign|publish)\b", body, re.IGNORECASE)
 
