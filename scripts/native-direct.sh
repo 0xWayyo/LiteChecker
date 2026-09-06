@@ -174,7 +174,7 @@ case "$action" in
         if [[ -f "$root/scripts/update.sh" && ! -L "$root/scripts/update.sh" ]]; then
             LITECHECKER_NATIVE_ROOT="$root" exec bash "$root/scripts/update.sh" probe
         fi
-        "$python" -m litechecker.direct_service --root "$root" --xray "$xray" --once
+        "$python" -m litechecker.macos_service --root "$root" --xray "$xray" --once
         ;;
     *)
         printf '%s\n' 'Использование: bash run.sh start|stop|status|logs|check'

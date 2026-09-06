@@ -27,7 +27,7 @@ from .update_manifest import (
     verify_release_metadata,
 )
 from .update_store import StoreError, UpdateStore, validate_source_zip
-from . import windows_security
+from . import platform_security
 
 
 CHECK_INTERVAL = timedelta(hours=1)
@@ -96,8 +96,8 @@ def _closed(
 def _read_file_bounded(path: Path, limit: int) -> bytes:
     if path.is_symlink() or not path.is_file():
         raise StoreError("configuration path is unsafe")
-    if windows_security.is_windows():
-        windows_security.assert_private_file(path)
+    if platform_security.is_windows():
+        platform_security.assert_private_file(path)
     try:
         descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         with os.fdopen(descriptor, "rb") as source:
@@ -137,8 +137,8 @@ def initialize_channel(root: Path, data: bytes) -> bool:
     if store.channel_path.exists() or store.channel_path.is_symlink():
         if store.channel_path.is_symlink() or not store.channel_path.is_file():
             raise StoreError("installed channel path is unsafe")
-        if windows_security.is_windows():
-            windows_security.assert_private_file(store.channel_path)
+        if platform_security.is_windows():
+            platform_security.assert_private_file(store.channel_path)
         return False
     store.ensure_layout()
     payload = (
@@ -150,7 +150,7 @@ def initialize_channel(root: Path, data: bytes) -> bool:
     except FileExistsError:
         return False
     with os.fdopen(descriptor, "wb") as output:
-        if not windows_security.is_windows():
+        if not platform_security.is_windows():
             os.fchmod(output.fileno(), 0o600)
         output.write(payload)
         output.flush()
@@ -264,9 +264,9 @@ async def _bounded_fetch(
 def _try_lock(path: Path, allowed_root: Path) -> FileLock | None:
     path = Path(path)
     allowed_root = Path(allowed_root)
-    if windows_security.is_windows():
-        windows_security.assert_private_directory(allowed_root)
-        windows_security.reject_reparse_points(path)
+    if platform_security.is_windows():
+        platform_security.assert_private_directory(allowed_root)
+        platform_security.reject_reparse_points(path)
     if not path.is_absolute() or not allowed_root.is_absolute() or allowed_root.is_symlink():
         raise StoreError("lock path is unsafe")
     try:
@@ -283,8 +283,8 @@ def _try_lock(path: Path, allowed_root: Path) -> FileLock | None:
                 raise StoreError("lock parent is unsafe")
         else:
             cursor.mkdir(mode=0o700)
-        if windows_security.is_windows():
-            windows_security.assert_private_directory(cursor)
+        if platform_security.is_windows():
+            platform_security.assert_private_directory(cursor)
         if hasattr(os, "getuid") and cursor.stat().st_uid != os.getuid():
             raise StoreError("lock parent has unexpected ownership")
     if path.exists() or path.is_symlink():
@@ -299,8 +299,8 @@ def _try_lock(path: Path, allowed_root: Path) -> FileLock | None:
             0o600,
         )
         os.close(descriptor)
-    if windows_security.is_windows():
-        windows_security.assert_private_file(path)
+    if platform_security.is_windows():
+        platform_security.assert_private_file(path)
     else:
         path.chmod(0o600)
     lock = FileLock(path, preserve_lock_file=True)
@@ -309,7 +309,7 @@ def _try_lock(path: Path, allowed_root: Path) -> FileLock | None:
     except Timeout:
         return None
     try:
-        if not windows_security.is_windows():
+        if not platform_security.is_windows():
             path.chmod(0o600)
     except OSError:
         lock.release()

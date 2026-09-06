@@ -524,18 +524,18 @@ def test_telegram_factory_builds_real_client_with_independent_proxy(tmp_path, mo
 def test_once_exit_status_requires_complete_cycle_and_requested_delivery(
     monkeypatch, result, no_send, expected,
 ):
-    from litechecker import direct_service
+    from litechecker import macos_service
 
-    monkeypatch.setattr(direct_service, "service_settings", lambda *args, **kwargs: object())
+    monkeypatch.setattr(macos_service, "service_settings", lambda *args, **kwargs: object())
 
     async def service(*args, **kwargs):
         return result
 
-    monkeypatch.setattr(direct_service, "run_service", service)
+    monkeypatch.setattr(macos_service, "run_service", service)
     arguments = ["--root", "/fixture/root", "--xray", "/fixture/xray", "--once"]
     if no_send:
         arguments.append("--no-send")
-    assert direct_service.main(arguments) == expected
+    assert macos_service.main(arguments) == expected
 
 
 @pytest.mark.asyncio

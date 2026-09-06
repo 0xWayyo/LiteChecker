@@ -30,6 +30,8 @@ def source_zip(files=None):
 @pytest.fixture
 def windows(monkeypatch):
     from litechecker import windows_security
+    from litechecker import platform_security
+    monkeypatch.setattr(platform_security, "is_windows", lambda: True)
     monkeypatch.setattr(windows_security, "is_windows", lambda: True)
     # GetNamedSecurityInfo/GetTokenInformation are the native OS boundary.
     monkeypatch.setattr(windows_security, "_read_directory_acl", lambda path: (

@@ -21,7 +21,7 @@ from litechecker.measurement import SubscriptionFetcher, make_measurement_depend
 from litechecker.collector.reporting import _result_line, chunk_message
 from litechecker.collector.telegram import TelegramClient
 from litechecker.config import StandaloneSettings
-from litechecker.direct_network import DirectNetworkUnavailable, MacDirectNetwork
+from litechecker.direct_network import DirectNetworkUnavailable
 from litechecker.direct_observation import save_last_observation
 from litechecker.direct_relay import DirectRelay
 from litechecker.direct_subscription import parse_trial_subscription
@@ -379,7 +379,10 @@ async def run_trial(settings, *, send=False, telegram=None, production=False,
             await client.send_chunks(chunk_message(text))
 
     try:
-        network = await (network_factory or MacDirectNetwork.discover)()
+        if not network_factory:
+            from litechecker.macos_network import MacDirectNetwork
+            network_factory = MacDirectNetwork.discover
+        network = await network_factory()
     except DirectNetworkUnavailable:
         observed_at = datetime.now(UTC)
         if production:
@@ -503,6 +506,13 @@ def main(argv=None):
     except Exception:
         print("Пробная проверка не завершена. Проверьте зависимости, доступ к сети и файлам secrets. Доставка Telegram не подтверждена.")
         return 1
+
+
+def __getattr__(name: str):
+    if name == "MacDirectNetwork":
+        from litechecker.macos_network import MacDirectNetwork
+        return MacDirectNetwork
+    raise AttributeError(name)
 
 
 if __name__ == "__main__":

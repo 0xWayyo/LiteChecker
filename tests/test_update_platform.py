@@ -1,5 +1,8 @@
 """Platform changes use real local state and only synthetic OS command boundaries."""
 
+import asyncio
+import platform
+import subprocess
 import json
 import os
 from pathlib import Path
@@ -91,7 +94,7 @@ async def test_native_activation_selects_release_code_but_original_data(tmp_path
     record_desired_running(root, True, system="Darwin")
     await adapter.activate(release, True)
     plist = plistlib.loads((tmp_path / "LaunchAgents/com.litechecker.direct.plist").read_bytes())
-    assert plist["ProgramArguments"] == [str(release / ".native-direct/venv/bin/python"), "-m", "litechecker.direct_service", "--root", str(root), "--xray", str(release / ".native-direct/xray")]
+    assert plist["ProgramArguments"] == [str(release / ".native-direct/venv/bin/python"), "-m", "litechecker.macos_service", "--root", str(root), "--xray", str(release / ".native-direct/xray")]
     assert plist["WorkingDirectory"] == str(release)
     assert plist["EnvironmentVariables"]["PYTHONPATH"] == str(release / "src")
     assert plist["Umask"] == 0o077
@@ -126,7 +129,7 @@ async def test_native_install_and_update_activation_share_direct_plist_schema(tm
     assert updated["ProgramArguments"] == [
         str(root / ".native-direct/venv/bin/python"),
         "-m",
-        "litechecker.direct_service",
+        "litechecker.macos_service",
         "--root",
         str(root),
         "--xray",
@@ -163,9 +166,9 @@ def test_native_paths_honor_launch_agents_override_for_service_and_schedule(
     )
     launch_agents = tmp_path / "Custom LaunchAgents"
     monkeypatch.setenv("LITECHECKER_LAUNCH_AGENTS_DIR", str(launch_agents))
-    monkeypatch.setattr(update_platform.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(platform, "system", lambda: "Darwin")
     monkeypatch.setattr(
-        update_platform.subprocess,
+        subprocess,
         "run",
         lambda *args, **kwargs: type("Result", (), {"returncode": 0})(),
     )
@@ -198,9 +201,9 @@ def test_native_schedule_persists_absolute_launch_agents_for_later_adapter(
     )
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("LITECHECKER_LAUNCH_AGENTS_DIR", "Custom LaunchAgents")
-    monkeypatch.setattr(update_platform.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(platform, "system", lambda: "Darwin")
     monkeypatch.setattr(
-        update_platform.subprocess,
+        subprocess,
         "run",
         lambda *args, **kwargs: type("Result", (), {"returncode": 0})(),
     )
@@ -404,9 +407,9 @@ def test_native_hourly_schedule_executes_stable_updater_only(tmp_path, monkeypat
     def run(args, **kwargs):
         calls.append(args)
         return type("Result", (), {"returncode": 0})()
-    monkeypatch.setattr(update_platform.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(platform, "system", lambda: "Darwin")
     monkeypatch.setattr(update_platform.Path, "home", lambda: tmp_path)
-    monkeypatch.setattr(update_platform.subprocess, "run", run)
+    monkeypatch.setattr(subprocess, "run", run)
     update_platform.install_update_schedule(root)
     plist = plistlib.loads((tmp_path / "Library/LaunchAgents/com.litechecker.updater.plist").read_bytes())
     assert plist["StartInterval"] == 3600 and plist["RunAtLoad"]
@@ -485,7 +488,7 @@ async def test_native_health_waits_for_selected_process_and_never_uses_endpoint_
     async def no_wait(seconds):
         return None
     adapter._runner = delayed
-    monkeypatch.setattr(update_platform.asyncio, "sleep", no_wait)
+    monkeypatch.setattr(asyncio, "sleep", no_wait)
     assert await adapter.healthy(release, True)
     assert attempts >= 2
 
@@ -521,9 +524,9 @@ def test_linux_schedule_uses_user_timer_and_quotes_space_unicode_paths(tmp_path,
     def run(args, **kwargs):
         calls.append(args)
         return type("Result", (), {"returncode": 0})()
-    monkeypatch.setattr(update_platform.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
     monkeypatch.setattr(update_platform.Path, "home", lambda: tmp_path)
-    monkeypatch.setattr(update_platform.subprocess, "run", run)
+    monkeypatch.setattr(subprocess, "run", run)
     update_platform.install_update_schedule(root)
     service = (tmp_path / ".config/systemd/user/litechecker-updater.service").read_text()
     timer = (tmp_path / ".config/systemd/user/litechecker-updater.timer").read_text()
@@ -541,7 +544,7 @@ async def test_manual_start_selects_release_only_after_pending_update_commits(tm
     file(root / ".updates/install.json", json.dumps({"active": None}))
     runner = Runner()
     adapter = update_platform.NativeUpdateAdapter(root, runner=runner, launch_agents=tmp_path / "LaunchAgents")
-    monkeypatch.setattr(update_platform.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(platform, "system", lambda: "Darwin")
     monkeypatch.setattr(update_platform, "platform_adapter", lambda _: adapter)
     async with AsyncFileLock(root / ".updates/update.lock", mode=0o600, preserve_lock_file=True):
         task = asyncio.create_task(update_platform.set_checker_running(root, True))
@@ -588,6 +591,6 @@ async def test_docker_health_requires_stable_selected_startup_process(tmp_path, 
     async def no_wait(_):
         return None
     adapter._container = observe
-    monkeypatch.setattr(update_platform.asyncio, "sleep", no_wait)
+    monkeypatch.setattr(asyncio, "sleep", no_wait)
     assert await adapter.healthy(release, True) is (not crash)
     assert calls >= 3

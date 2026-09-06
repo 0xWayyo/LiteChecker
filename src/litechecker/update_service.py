@@ -47,7 +47,7 @@ def main(argv=None) -> int:
             return 0
         if args.action == "configure":
             from litechecker.updater import initialize_channel
-            from litechecker.native_runtime import read_bounded_regular
+            from litechecker.file_safety import read_bounded_regular
             if args.channel is None:
                 raise ValueError
             path = args.channel.absolute()

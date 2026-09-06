@@ -19,6 +19,8 @@ def _windows_error(code):
 
 @pytest.fixture
 def windows(monkeypatch):
+    from litechecker import platform_security
+    monkeypatch.setattr(platform_security, "is_windows", lambda: True)
     monkeypatch.setattr(windows_security, "is_windows", lambda: True)
     monkeypatch.setattr(windows_security, "_read_directory_acl", lambda path: (
         "S-1-5-21-123", "S-1-5-21-123", True,
@@ -145,6 +147,8 @@ def test_persistent_windows_error_stops_within_deadline_and_preserves_both_files
 @pytest.mark.parametrize("windows_mode,code", [(True, 2), (True, 112), (True, None), (False, 5)])
 def test_unrelated_errors_and_posix_fail_immediately(replacement, monkeypatch, windows_mode, code):
     module, source, target, clock = replacement
+    from litechecker import platform_security
+    monkeypatch.setattr(platform_security, "is_windows", lambda: windows_mode)
     monkeypatch.setattr(windows_security, "is_windows", lambda: windows_mode)
     error = _windows_error(code)
     attempts = []

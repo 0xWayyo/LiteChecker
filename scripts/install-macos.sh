@@ -143,7 +143,7 @@ PYTHONPATH="$root/src" "$root/.native-direct/venv/bin/python" -m litechecker.nat
 # is not touched until runtime, secrets, settings, Xray and plist pass the same
 # validation used by the daemon itself.
 PYTHONPATH="$root/src" "$root/.native-direct/venv/bin/python" -c \
-    'import sys; from pathlib import Path; from litechecker.direct_service import service_settings; service_settings(Path(sys.argv[1]), Path(sys.argv[2]))' \
+    'import sys; from pathlib import Path; from litechecker.macos_service import service_settings; service_settings(Path(sys.argv[1]), Path(sys.argv[2]))' \
     "$root" "$root/.native-direct/xray"
 
 stopped_legacy=''

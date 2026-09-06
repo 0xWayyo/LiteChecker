@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from litechecker.native_config import NATIVE_CONFIG_KEYS
-from litechecker.native_runtime import atomic_write, read_bounded_regular
+from litechecker.file_safety import atomic_write, read_bounded_regular
 from litechecker.telegram_proxy import validate_telegram_proxy_url
 from litechecker.updater import _try_lock
 

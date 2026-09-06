@@ -30,7 +30,7 @@ ACTIVE = """en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 15
 
 
 def network(monkeypatch):
-    from litechecker import direct_network as module
+    from litechecker import macos_network as module
 
     monkeypatch.setattr(module.sys, "platform", "darwin")
     monkeypatch.setattr(module.socket, "if_nametoindex", lambda name: 14)
@@ -40,7 +40,7 @@ def network(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_discover_selects_only_active_physical_interface_and_its_dhcp_dns(monkeypatch):
-    from litechecker import direct_network as module
+    from litechecker import macos_network as module
 
     network(monkeypatch)
     outputs = {
@@ -63,7 +63,7 @@ async def test_discover_selects_only_active_physical_interface_and_its_dhcp_dns(
 
 @pytest.mark.asyncio
 async def test_discover_refuses_multiple_active_interfaces(monkeypatch):
-    from litechecker import direct_network as module
+    from litechecker import macos_network as module
 
     network(monkeypatch)
 
@@ -78,7 +78,7 @@ async def test_discover_refuses_multiple_active_interfaces(monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("dns", ["", "127.0.0.1", "::1", "0.0.0.0", "224.0.0.1", "dns.example", "8.8.8.8%en0"])
 async def test_discover_refuses_unusable_dhcp_dns_without_system_fallback(monkeypatch, dns):
-    from litechecker import direct_network as module
+    from litechecker import macos_network as module
 
     network(monkeypatch)
 
@@ -97,7 +97,7 @@ async def test_discover_refuses_unusable_dhcp_dns_without_system_fallback(monkey
 @pytest.mark.asyncio
 @pytest.mark.parametrize("host", ["127.0.0.1", "192.168.1.1", "100.64.0.1", "169.254.1.1", "224.0.0.1", "::1", "fe80::1", "2001:db8::1", "::ffff:8.8.8.8", "8.8.8.8%en0", "", "bad name"])
 async def test_resolve_refuses_non_public_or_invalid_targets(monkeypatch, host):
-    from litechecker import direct_network as module
+    from litechecker import macos_network as module
 
     direct = network(monkeypatch)
     with pytest.raises(module.DirectNetworkUnavailable):
@@ -118,7 +118,7 @@ async def test_resolve_numeric_public_address_never_calls_host_resolver(monkeypa
 
 @pytest.mark.asyncio
 async def test_invalid_dns_name_does_not_send_a_query(monkeypatch):
-    from litechecker import direct_network as module
+    from litechecker import macos_network as module
 
     direct = network(monkeypatch)
 
@@ -132,7 +132,7 @@ async def test_invalid_dns_name_does_not_send_a_query(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_invalid_port_does_not_trigger_dns(monkeypatch):
-    from litechecker import direct_network as module
+    from litechecker import macos_network as module
 
     direct = network(monkeypatch)
 
@@ -146,7 +146,7 @@ async def test_invalid_port_does_not_trigger_dns(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_changed_interface_index_stops_before_connect(monkeypatch):
-    from litechecker import direct_network as module
+    from litechecker import macos_network as module
 
     direct = network(monkeypatch)
     monkeypatch.setattr(module.socket, "if_nametoindex", lambda name: 27)
@@ -156,7 +156,7 @@ async def test_changed_interface_index_stops_before_connect(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_reused_interface_index_stops_before_connect(monkeypatch):
-    from litechecker import direct_network as module
+    from litechecker import macos_network as module
 
     direct = network(monkeypatch)
     monkeypatch.setattr(module.socket, "if_indextoname", lambda index: "utun7")
@@ -183,7 +183,7 @@ class SocketFailure:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mismatch", [False, True])
 async def test_binding_error_or_readback_mismatch_closes_socket(monkeypatch, mismatch):
-    from litechecker import direct_network as module
+    from litechecker import macos_network as module
 
     direct = network(monkeypatch)
     failed = SocketFailure(mismatch=mismatch)
@@ -228,7 +228,7 @@ class BoundSocket:
     (OSError(errno.EIO, "private detail"), "direct_connection_failed"),
 ])
 async def test_connect_preserves_transport_cause_and_bound_socket_without_fallback(monkeypatch, failure, code):
-    from litechecker import direct_network as module
+    from litechecker import macos_network as module
 
     direct = network(monkeypatch)
     bound = BoundSocket()
@@ -259,7 +259,7 @@ async def test_connect_preserves_transport_cause_and_bound_socket_without_fallba
 @pytest.mark.asyncio
 @pytest.mark.parametrize("last_code", ["direct_connection_timeout", "interface_binding_failed"])
 async def test_all_addresses_failed_preserves_last_attempt_code(monkeypatch, last_code):
-    from litechecker import direct_network as module
+    from litechecker import macos_network as module
 
     direct = network(monkeypatch)
     attempts = []
@@ -282,7 +282,7 @@ async def test_all_addresses_failed_preserves_last_attempt_code(monkeypatch, las
 
 @pytest.mark.asyncio
 async def test_discover_refuses_other_platforms(monkeypatch):
-    from litechecker import direct_network as module
+    from litechecker import macos_network as module
 
     monkeypatch.setattr(module.sys, "platform", "linux")
     with pytest.raises(module.DirectNetworkUnavailable):
@@ -291,7 +291,7 @@ async def test_discover_refuses_other_platforms(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_failed_native_command_is_unavailable():
-    from litechecker import direct_network as module
+    from litechecker import macos_network as module
 
     with pytest.raises(module.DirectNetworkUnavailable):
         await module._run("/usr/bin/false")
@@ -301,7 +301,7 @@ async def test_failed_native_command_is_unavailable():
 async def dns_fixture(monkeypatch, direct, response_builder):
     import dns.message
 
-    from litechecker import direct_network as module
+    from litechecker import macos_network as module
 
     requests = []
     finished = asyncio.Event()
@@ -375,7 +375,7 @@ async def test_dns_rejects_mismatched_unsafe_or_unusable_answers(monkeypatch, fa
     import dns.rcode
     import dns.rrset
 
-    from litechecker import direct_network as module
+    from litechecker import macos_network as module
 
     direct = network(monkeypatch)
 
@@ -421,7 +421,7 @@ async def test_dns_distinguishes_negative_answer_from_invalid_response_without_f
     import dns.message
     import dns.rcode
 
-    from litechecker import direct_network as module
+    from litechecker import macos_network as module
 
     direct = network(monkeypatch)
 
@@ -451,7 +451,7 @@ async def test_dns_distinguishes_negative_answer_from_invalid_response_without_f
 
 @pytest.mark.asyncio
 async def test_dns_internal_timeout_preserves_cause_and_closes_stream_without_fallback(monkeypatch):
-    from litechecker import direct_network as module
+    from litechecker import macos_network as module
 
     direct = network(monkeypatch)
     timeout = asyncio.timeout
@@ -502,7 +502,7 @@ async def test_cancelled_dns_closes_connected_stream(monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.skipif(__import__("sys").platform != "darwin", reason="Darwin bound-interface socket option")
 async def test_connect_returns_streams_after_real_socket_interface_binding(monkeypatch):
-    from litechecker import direct_network as module
+    from litechecker import macos_network as module
 
     index = socket.if_nametoindex("lo0")
     direct = module.MacDirectNetwork("en0", index, ("127.0.0.1",), ("192.168.1.1",))

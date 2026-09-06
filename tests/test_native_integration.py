@@ -5,7 +5,7 @@ import plistlib
 
 
 def test_migrated_installation_loads_same_identity_and_proxy_with_real_venv_layout(tmp_path):
-    from litechecker.direct_service import service_settings
+    from litechecker.macos_service import service_settings
     from litechecker.native_install import install_configuration
 
     source = tmp_path / "Архив с пробелами"
@@ -53,7 +53,7 @@ def test_migrated_installation_loads_same_identity_and_proxy_with_real_venv_layo
     assert settings.telegram_proxy_url.get_secret_value() == "socks5://fixture:password@192.0.2.10:1080"
     assert settings.state_dir == root / "state/native-direct"
     args = plistlib.loads(plist.read_bytes())["ProgramArguments"]
-    assert args[:3] == [str(venv_python), "-m", "litechecker.direct_service"]
+    assert args[:3] == [str(venv_python), "-m", "litechecker.macos_service"]
     assert "password" not in " ".join(args)
 
     # A normal user edit can use a JSON number; reinstallation must preserve it.

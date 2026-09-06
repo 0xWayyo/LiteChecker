@@ -6,18 +6,18 @@ import os
 from pathlib import Path
 from time import monotonic as _monotonic, sleep as _sleep
 
-from . import windows_security
+from . import platform_security
 
 
 def _check_retry_paths(source: Path, destination: Path) -> None:
     if source.parent != destination.parent:
         raise ValueError("atomic-replace-parent-mismatch")
-    windows_security.reject_reparse_points(source)
-    windows_security.reject_reparse_points(destination)
-    windows_security.assert_private_directory(destination.parent)
-    windows_security.assert_private_file(source)
+    platform_security.reject_reparse_points(source)
+    platform_security.reject_reparse_points(destination)
+    platform_security.assert_private_directory(destination.parent)
+    platform_security.assert_private_file(source)
     if destination.exists():
-        windows_security.assert_private_file(destination)
+        platform_security.assert_private_file(destination)
 
 
 def atomic_replace(source: str | Path, destination: str | Path) -> None:
@@ -28,7 +28,7 @@ def atomic_replace(source: str | Path, destination: str | Path) -> None:
     a second; serialization, creation and fsync are never repeated. Callers
     retain ownership of temporary-file cleanup on failure.
     """
-    if not windows_security.is_windows():
+    if not platform_security.is_windows():
         os.replace(source, destination)
         return
     # mkstemp returns an absolute path even when callers pass a relative dir.

@@ -196,7 +196,7 @@ def test_native_controls_use_absolute_launchd_target_and_one_shot_check(tmp_path
     assert any(f"print gui/{uid}/com.litechecker.direct" in command for command in commands)
     assert any(f"bootout gui/{uid}/com.litechecker.direct" in command for command in commands)
     assert python_log.read_text().splitlines() == [
-        "-m", "litechecker.direct_service", "--root", str(root),
+        "-m", "litechecker.macos_service", "--root", str(root),
         "--xray", str(root / ".native-direct/xray"), "--once",
     ]
 

@@ -11,9 +11,9 @@ import stat
 import sys
 
 if __package__:
-    from . import windows_security
+    from . import platform_security
 else:  # The stable POSIX entry also executes this file directly.
-    import windows_security
+    import platform_security
 
 
 VERSION = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\Z")
@@ -32,15 +32,15 @@ def checked_path(root: Path, path: Path, *, regular: bool = False) -> Path:
         raise LauncherError() from None
     if ".." in relative.parts or root.is_symlink() or not root.is_dir():
         raise LauncherError()
-    if windows_security.is_windows():
+    if platform_security.is_windows():
         try:
-            windows_security.reject_reparse_points(path)
-            windows_security.assert_private_directory(root)
+            platform_security.reject_reparse_points(path)
+            platform_security.assert_private_directory(root)
             directory = root
             for component in relative.parts:
                 directory /= component
                 if directory.is_dir():
-                    windows_security.assert_private_directory(directory)
+                    platform_security.assert_private_directory(directory)
         except (OSError, ValueError):
             raise LauncherError() from None
     current = root
@@ -72,10 +72,10 @@ def read_json(root: Path, path: Path) -> dict:
 
 def read_bytes(root: Path, path: Path, maximum=65536) -> bytes:
     checked_path(root, path, regular=True)
-    windows = windows_security.is_windows()
+    windows = platform_security.is_windows()
     if windows:
-        windows_security.assert_private_directory(root)
-        windows_security.assert_private_file(path)
+        platform_security.assert_private_directory(root)
+        platform_security.assert_private_file(path)
     fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     try:
         metadata = os.fstat(fd)
@@ -120,9 +120,9 @@ def runtime_python(release: Path, *, system: str | None = None) -> Path:
         executable = release / ".windows-native/venv/Scripts/python.exe"
         try:
             checked_path(release, executable, regular=True)
-            windows_security.reject_reparse_points(executable)
-            windows_security.assert_private_directory(release)
-            windows_security.assert_private_file(executable)
+            platform_security.reject_reparse_points(executable)
+            platform_security.assert_private_directory(release)
+            platform_security.assert_private_file(executable)
         except (OSError, ValueError):
             raise LauncherError() from None
         return executable

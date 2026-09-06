@@ -121,7 +121,7 @@ def test_configuration_parses_env_as_data_and_forces_production_interval(tmp_pat
     payload = plistlib.loads(plist.read_bytes())
     assert payload["Label"] == "com.litechecker.direct"
     assert payload["ProgramArguments"] == [
-        str(runtime_python), "-m", "litechecker.direct_service",
+        str(runtime_python), "-m", "litechecker.macos_service",
         "--root", str(root), "--xray", str(xray),
     ]
     assert payload["RunAtLoad"] is True
