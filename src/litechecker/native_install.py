@@ -195,6 +195,36 @@ def _install_update_channel(source: Path, root: Path) -> None:
         initialize_channel(root, _read_regular(incoming))
 
 
+def _validate_install_profile(source: Path, root: Path) -> bytes | None:
+    """Reject an old installation before touching its settings, secrets or trust."""
+    from litechecker import distribution
+    from litechecker.update_manifest import parse_channel_config
+
+    platform = distribution.read_distribution(source)
+    incoming_path = source / "update-channel.json"
+    incoming = parse_channel_config(_read_regular(incoming_path)) if incoming_path.exists() or incoming_path.is_symlink() else None
+    if platform is None:
+        if incoming is not None and incoming.platform is not None:
+            raise ValueError("source distribution marker is missing")
+        return None  # Unprofiled author fixtures retain their separate API.
+    if platform != "macos" or platform != distribution.host_platform():
+        raise ValueError("native installation platform does not match host")
+    if incoming is None or incoming.platform != platform:
+        raise ValueError("source channel does not match distribution")
+    if root.exists() and any(root.iterdir()):
+        if distribution.read_distribution(root) != platform:
+            raise ValueError("incompatible installation; use an empty LITECHECKER_NATIVE_ROOT")
+        installed_path = root / ".updates/channel.json"
+        if not installed_path.exists() and not installed_path.is_symlink():
+            installed_path = root / "update-channel.json"
+        if not installed_path.exists() and not installed_path.is_symlink() and set(p.name for p in root.iterdir()) == {"distribution.json"}:
+            return _read_regular(source / "distribution.json")
+        installed = parse_channel_config(_read_regular(installed_path))
+        if (installed.platform, installed.public_key, installed.manifest_urls) != (platform, incoming.public_key, incoming.manifest_urls):
+            raise ValueError("incompatible channel; use an empty LITECHECKER_NATIVE_ROOT")
+    return _read_regular(source / "distribution.json")
+
+
 def install_configuration(source: Path, root: Path, plist_path: Path) -> None:
     source = source.absolute()
     root = root.absolute()
@@ -203,7 +233,10 @@ def install_configuration(source: Path, root: Path, plist_path: Path) -> None:
         raise ValueError("source must be a regular directory")
     if root.is_symlink():
         raise ValueError("installation root must not be a symbolic link")
+    marker = _validate_install_profile(source, root)
     _ensure_private_directory(root)
+    if marker is not None and not (root / "distribution.json").exists():
+        _atomic_write(root / "distribution.json", marker, 0o600)
     _copy_initial_private_data(source, root)
     _write_settings(source, root)
     _install_update_channel(source, root)

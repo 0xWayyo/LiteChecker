@@ -9,10 +9,9 @@ case "$system" in
     Darwin) root=${LITECHECKER_NATIVE_ROOT:-"$HOME/Library/Application Support/LiteChecker"}; kind=native; runtime=.native-direct; settings=native-settings.json ;;
     Linux)
         root=$source_root
-        if [[ -n "${WSL_DISTRO_NAME:-}" && "$source_root" == /mnt/* ]]; then root="$HOME/LiteChecker"; fi
         kind=docker; runtime=.updater-runtime; settings=.env.standalone
         ;;
-    *) printf '%s\n' 'Поддерживаются macOS, Linux и Ubuntu / WSL.' >&2; exit 2 ;;
+    *) printf '%s\n' 'Поддерживаются macOS и Linux.' >&2; exit 2 ;;
 esac
 export LITECHECKER_NATIVE_ROOT="$root"
 

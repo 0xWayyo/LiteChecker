@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Wrap validated universal source bytes in a compact Windows-facing layout."""
+"""Wrap validated Windows source files unchanged in the compact launcher/_app layout."""
 from __future__ import annotations
 
 import argparse
@@ -25,6 +25,11 @@ def build_package(source: Path, output: Path) -> str:
         raise ValueError("source archive is unavailable or too large")
     validated = validate_source_zip(source.read_bytes())
     payloads = {item.path.as_posix(): item.data for item in validated.files}
+    if "distribution.json" in payloads:
+        from litechecker.distribution import parse_distribution
+
+        if parse_distribution(payloads["distribution.json"]) != "windows":
+            raise ValueError("Windows wrapper requires a Windows distribution")
     if any(name not in payloads for name in ("LiteChecker.bat", "WINDOWS.md", "scripts/windows-app-entry.py", "scripts/windows-native.ps1")):
         raise ValueError("source archive does not contain native Windows controls")
     checksum = safe_path(output.with_suffix(".zip.sha256"))

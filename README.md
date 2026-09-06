@@ -1,22 +1,24 @@
 # LiteChecker
 
 LiteChecker проверяет доступность VLESS/REALITY-подписки с одного или нескольких
-устройств и отправляет диагностические отчёты. Версия: `0.5.1` (тестовая).
-
-Windows `0.5.0` снята со стабильного канала. Исправления доступны в тестовой
-`0.5.1`; стабильный канал пока остаётся на `0.4.0`.
+устройств и отправляет диагностические отчёты. Версия исходников: `0.6.0`.
+Три пакета используют общее ядро и отдельные подписанные каналы обновлений.
 
 ## Быстрый старт
 
-Для macOS и Linux откройте [стабильный релиз](https://github.com/0xWayyo/LiteChecker/releases/latest).
-Для native Windows — [тестовый релиз 0.5.1](https://github.com/0xWayyo/LiteChecker/releases/tag/v0.5.1).
+Откройте [релизы](https://github.com/0xWayyo/LiteChecker/releases).
 Скачайте прикреплённый клиентский ZIP (не архив `Source code`), распакуйте его и
 запустите installer для своей ОС:
 
-- macOS: откройте `INSTALL.command` — native DIRECT работает без Docker;
-- Windows 10/11 x64: скачайте `LiteChecker-0.5.1-Windows.zip` и откройте
+- macOS arm64/x86_64: `LiteChecker-0.6.0-macOS.zip`, откройте `INSTALL.command` — native DIRECT без Docker;
+- Windows 10/11 x64: скачайте `LiteChecker-0.6.0-Windows.zip` и откройте
   `LiteChecker.bat` — нативно, без WSL, Docker и прав администратора;
-- Linux: выполните `bash INSTALL.sh`.
+- Linux x86_64/arm64: `LiteChecker-0.6.0-Linux.zip`, выполните `bash INSTALL.sh`.
+  Нужны Docker Engine и Docker Compose; используется обычный маршрут Docker/хоста, режима DIRECT для Linux нет.
+
+Используйте новую папку: перенос из старых тестовых версий и сброс старого канала
+не выполняются. Технический `windows-update-source.zip` предназначен для
+обновлятора; для первой установки Windows выбирайте архив `Windows.zip`.
 
 Откроется небольшое меню в терминале. При первом запуске выберите «Установить
 и настроить»: мастер спросит подписку, токен бота, ID чата и необязательный
@@ -47,8 +49,8 @@ DNS, который может перехватываться TUN. Если ко
 конфигурация Happ TUN; обход произвольного VPN или Kill Switch не гарантируется.
 Telegram использует отдельный настроенный прокси или обычный маршрут.
 
-Старый WSL-режим остаётся для существующих установок; автоматического переноса
-из WSL в native Windows нет. Перед запуском native остановите старый экземпляр.
+Старые установки остаются отдельно. Перед запуском новой остановите старый экземпляр
+через его меню, чтобы не запустить две проверки одновременно.
 
 В клиентском ZIP — установщики, необходимый runtime, короткая инструкция и
 обновлятор. Тесты, CI, инструменты разработки, подробные руководства и примеры
@@ -64,17 +66,21 @@ Telegram использует отдельный настроенный прок
 
 ```bash
 uv sync --frozen --no-dev
-uv run --frozen --no-dev python scripts/package_agent.py
+uv run --frozen --no-dev python scripts/package_platforms.py \
+  --version 0.6.0 --repository 0xWayyo/LiteChecker \
+  --public-key /absolute/path/signing-public.key --output dist/platform-sources-0.6.0
 ```
 
-Для одного диагностического прогона на macOS откройте `TRY-DIRECT.command`.
-Флаг packager `--direct-trial` сохранён как совместимый alias и не создаёт второй
-вид архива.
+Команда читает только явный список публичных файлов и публичный ключ. Для выпуска
+трёх подписанных пакетов одной командой см. руководство ниже. `package_agent.py`
+и trial-инструменты оставлены для авторских тестов и не входят в дистрибутивы.
 
 ## Документация
 
 - [Установка агента](docs/installation/agent.md)
 - [Windows без WSL](WINDOWS.md)
+- [macOS](MACOS.md)
+- [Linux и Docker](LINUX.md)
 - [Эксплуатация и развёртывание](docs/operations/full-reference.md)
 - [Пробный DIRECT](docs/operations/direct-trial.md)
 - [Обновления](docs/operations/updates.md)

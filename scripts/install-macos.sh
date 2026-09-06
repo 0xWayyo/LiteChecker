@@ -95,16 +95,69 @@ verify_payload() {
 }
 
 payload=(pyproject.toml uv.lock run.sh scripts/native-direct.sh scripts/install-macos.sh)
-for relative in scripts/update.sh scripts/prepare-updater.sh scripts/control.sh INSTALL.command update-channel.json docs/operations/updates.md; do
+for relative in scripts/update.sh scripts/prepare-updater.sh scripts/control.sh INSTALL.command MACOS.md update-channel.json docs/operations/updates.md; do
     if [[ -e "$source_root/$relative" || -L "$source_root/$relative" ]]; then
         payload+=("$relative")
     fi
 done
+if [[ -e "$source_root/distribution.json" || -L "$source_root/distribution.json" ]]; then
+    payload+=(distribution.json)
+fi
 linked_runtime=$(find "$source_root/src/litechecker" -type l -print -quit)
 [[ -z "$linked_runtime" ]] || die 'Исходное дерево Python не должно содержать символические ссылки.'
 while IFS= read -r -d '' incoming; do
     payload+=("${incoming#"$source_root"/}")
 done < <(find "$source_root/src/litechecker" -type f -name '*.py' -print0)
+# Production installs use a deliberately narrow canonical grammar, also emitted
+# by the updater. No Python is available before runtime preparation. Never parse
+# arbitrary JSON with whitespace stripping or source/eval. Python validates the
+# full schema again before any settings or trust are initialized.
+profile_refusal='Папка содержит несовместимую или небезопасную установку. Старые данные сохранены. Для новой установки задайте пустую папку через LITECHECKER_NATIVE_ROOT; старые данные не удаляйте.'
+profile_line() {
+    local path=$1 limit=$2 parent size line
+    [[ -f "$path" && ! -L "$path" && -O "$path" ]] || die "$profile_refusal"
+    parent=${path%/*}
+    while [[ "$parent" != / && "$parent" != . ]]; do
+        [[ -d "$parent" && ! -L "$parent" ]] || die "$profile_refusal"
+        parent=${parent%/*}; [[ -n "$parent" ]] || parent=/
+    done
+    [[ -z "$(find "$path" -prune \( -perm -020 -o -perm -002 \) -print)" ]] || die "$profile_refusal"
+    size=$(wc -c < "$path"); size=${size//[[:space:]]/}
+    [[ "$size" =~ ^[0-9]+$ && "$size" -le "$limit" ]] || die "$profile_refusal"
+    IFS= read -r line < "$path" || die "$profile_refusal"
+    [[ "$size" -eq $((${#line} + 1)) ]] || die "$profile_refusal"
+    printf '%s' "$line"
+}
+profiled=false
+if [[ -e "$source_root/distribution.json" || -L "$source_root/distribution.json" \
+      || -e "$source_root/update-channel.json" || -L "$source_root/update-channel.json" || -e "$source_root/MACOS.md" ]]; then
+    profiled=true
+    expected_marker='{"platform":"macos","schema":1}'
+    incoming_marker=$(profile_line "$source_root/distribution.json" 4096)
+    [[ "$incoming_marker" == "$expected_marker" ]] || die "$profile_refusal"
+    verify_payload distribution.json
+    verify_payload update-channel.json
+    incoming_channel=$(profile_line "$source_root/update-channel.json" 65536)
+    channel_pattern='^\{"enabled":true,"manifest_urls":\["https://github\.com/[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}/releases/latest/download/release-macos\.json"\],"platform":"macos","public_key":"[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=","schema":2\}$'
+    [[ "$incoming_channel" =~ $channel_pattern ]] || die "$profile_refusal"
+    if [[ -d "$root" && -n "$(find "$root" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+        [[ -O "$root" && -z "$(find "$root" -prune \( -perm -020 -o -perm -002 \) -print)" ]] || die "$profile_refusal"
+        installed_marker=$(profile_line "$root/distribution.json" 4096)
+        [[ "$installed_marker" == "$expected_marker" ]] || die "$profile_refusal"
+        channel_path="$root/update-channel.json"
+        if [[ -e "$root/.updates/channel.json" || -L "$root/.updates/channel.json" ]]; then
+            channel_path="$root/.updates/channel.json"
+        fi
+        if [[ ! -e "$channel_path" && ! -L "$channel_path" \
+              && "$(find "$root" -mindepth 1 -maxdepth 1 -print | wc -l)" -eq 1 ]]; then
+            : # An interruption after the first verified anchor, before channel copy.
+        else
+            installed_channel=$(profile_line "$channel_path" 65536)
+            disabled_channel=${incoming_channel/\"enabled\":true/\"enabled\":false}
+            [[ "$installed_channel" == "$incoming_channel" || "$installed_channel" == "$disabled_channel" ]] || die "$profile_refusal"
+        fi
+    fi
+fi
 for relative in "${payload[@]}"; do
     verify_payload "$relative"
     validate_destination "$relative"
@@ -123,6 +176,11 @@ copy_payload() {
     esac
 }
 
+if [[ "$profiled" == true ]]; then
+    # Preserve these first so an interrupted dependency download can be retried.
+    copy_payload distribution.json
+    copy_payload update-channel.json
+fi
 for relative in "${payload[@]}"; do
     copy_payload "$relative"
 done
@@ -191,7 +249,7 @@ fi
 bash "$root/scripts/native-direct.sh" status
 if [[ -f "$root/.updates/channel.json" && -f "$root/scripts/update.sh" ]]; then
     if ! bash "$root/scripts/update.sh" schedule; then
-        printf '%s\n' 'Внимание: чекер запущен, но планировщик обновлений не установлен. См. docs/operations/updates.md.' >&2
+        printf '%s\n' 'Внимание: чекер запущен, но планировщик обновлений не установлен. См. MACOS.md.' >&2
     fi
 fi
 printf '\n%s\n' 'LiteChecker DIRECT установлен и запущен без Docker.'

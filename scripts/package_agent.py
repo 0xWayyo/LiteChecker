@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package the client runtime and installers, not developer or operator tooling."""
+"""Legacy author/test bundle; production releases use package_platforms.py."""
 
 from __future__ import annotations
 
@@ -28,12 +28,13 @@ FILES = (
 )
 
 
-def _read_release_input(path: Path) -> bytes:
+def _read_release_input(path: Path, *, root: Path | None = None) -> bytes:
+    root = ROOT if root is None else root
     try:
-        relative = path.relative_to(ROOT)
+        relative = path.relative_to(root)
     except ValueError as exc:
         raise ValueError("release input must be inside the project") from exc
-    current = ROOT
+    current = root
     for component in relative.parts[:-1]:
         current /= component
         if current.is_symlink() or not current.is_dir():

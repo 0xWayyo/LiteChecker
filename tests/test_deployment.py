@@ -52,7 +52,7 @@ def _checkout_packaging_block() -> str:
     return next(
         block
         for block in re.findall(r"```bash\n(.*?)\n```", section, flags=re.DOTALL)
-        if "scripts/package_agent.py" in block
+        if "scripts/package_platforms.py" in block
     )
 
 
@@ -593,13 +593,13 @@ def test_built_archives_contain_only_explicit_release_members(tmp_path):
     assert any(member == "litechecker/collector/reporting.py" for member in members)
 
 
-def test_documented_checkout_packaging_workflow_builds_a_valid_archive(tmp_path):
+def test_documented_checkout_packaging_workflow_builds_valid_platform_archives(tmp_path):
     checkout = tmp_path / "checkout"
     shutil.copytree(
         ROOT,
         checkout,
         ignore=shutil.ignore_patterns(
-            ".git", ".venv", ".pytest_cache", "__pycache__", "dist"
+            ".git", ".venv", ".pytest_cache", "__pycache__", "dist", "secrets", "state", ".superpowers"
         ),
     )
     tools = tmp_path / "bin"
@@ -628,8 +628,14 @@ run)
 esac""",
     )
 
+    import base64
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    public_key = Ed25519PrivateKey.generate().public_key().public_bytes_raw()
+    (checkout / "test-signing-public.key").write_bytes(base64.b64encode(public_key) + b"\n")
+    command = _checkout_packaging_block().replace("/absolute/path/signing-public.key", "test-signing-public.key")
     result = subprocess.run(
-        ["bash", "-eu", "-c", _checkout_packaging_block()],
+        ["bash", "-eu", "-c", command],
         cwd=checkout,
         env={
             **os.environ,
@@ -643,10 +649,17 @@ esac""",
     )
 
     assert result.returncode == 0, result.stderr
-    archive = checkout / "dist/LiteChecker-agent.zip"
-    validated = validate_source_zip(archive.read_bytes())
-    assert validated.sha256
-    assert any(file.path.as_posix() == "НАЧНИТЕ-ЗДЕСЬ.txt" for file in validated.files)
+    output = checkout / "dist/platform-sources-0.6.0"
+    assert len(list(output.iterdir())) == 3
+    for platform, suffix, guide in (
+        ("windows", "windows-update-source", "WINDOWS.md"),
+        ("macos", "macOS", "MACOS.md"),
+        ("linux", "Linux", "LINUX.md"),
+    ):
+        archive = output / f"LiteChecker-0.6.0-{suffix}.zip"
+        validated = validate_source_zip(archive.read_bytes(), expected_platform=platform, expected_version="0.6.0")
+        assert validated.sha256
+        assert any(file.path.as_posix() == guide for file in validated.files)
 
 
 def test_client_markdown_links_resolve_inside_archive_or_use_https():

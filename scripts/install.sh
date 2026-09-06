@@ -16,19 +16,51 @@ if [[ "$system" == Darwin ]]; then
 else
     printf '%s\n' 'IPinfo не получает токен, подписку или имя компьютера. Отключение: LC_AUTO_CITY=false и LC_AUTO_NETWORK=false в .env.standalone.' ''
 fi
-if [[ -n "${WSL_DISTRO_NAME:-}" && "$project_dir" == /mnt/* ]]; then
-    exec bash "$project_dir/scripts/install-wsl.sh" "$project_dir"
-fi
 if [[ "$system" == Darwin ]]; then
     exec bash "$project_dir/scripts/install-macos.sh" "$project_dir"
 fi
 
-if ! command -v docker >/dev/null 2>&1; then
-    if [[ "$system" == Darwin || -n "${WSL_DISTRO_NAME:-}" ]]; then
-        fail 'Установите и откройте Docker Desktop: https://www.docker.com/products/docker-desktop/
-В Windows включите Settings → Resources → WSL Integration для Ubuntu.
-Когда Docker запустится, снова откройте этот установщик.'
+# First-install identity must be checked before Docker, setup or runtime writes.
+# Unprofiled developer fixtures have neither a channel nor production guide.
+profile_refusal='Пакет или сохранённый канал не соответствует Linux. Файлы устройства сохранены. Распакуйте Linux ZIP в новую папку; старый канал не сбрасывайте.'
+profile_line() {
+    local path=$1 limit=$2 parent size line
+    [[ -f "$path" && ! -L "$path" && -O "$path" ]] || fail "$profile_refusal"
+    parent=${path%/*}
+    while [[ "$parent" != / && "$parent" != . ]]; do
+        [[ -d "$parent" && ! -L "$parent" ]] || fail "$profile_refusal"
+        parent=${parent%/*}; [[ -n "$parent" ]] || parent=/
+    done
+    [[ -z "$(find "$path" -prune \( -perm -020 -o -perm -002 \) -print)" ]] || fail "$profile_refusal"
+    size=$(wc -c < "$path"); size=${size//[[:space:]]/}
+    [[ "$size" =~ ^[0-9]+$ && "$size" -le "$limit" ]] || fail "$profile_refusal"
+    IFS= read -r line < "$path" || fail "$profile_refusal"
+    [[ "$size" -eq $((${#line} + 1)) ]] || fail "$profile_refusal"
+    printf '%s' "$line"
+}
+if [[ -e distribution.json || -L distribution.json || -e update-channel.json || -L update-channel.json || -e LINUX.md ]]; then
+    [[ "$system" == Linux ]] || fail "$profile_refusal"
+    marker=$(profile_line "$project_dir/distribution.json" 4096)
+    [[ "$marker" == '{"platform":"linux","schema":1}' ]] || fail "$profile_refusal"
+    incoming_channel=$(profile_line "$project_dir/update-channel.json" 65536)
+    channel_pattern='^\{"enabled":true,"manifest_urls":\["https://github\.com/[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}/releases/latest/download/release-linux\.json"\],"platform":"linux","public_key":"[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=","schema":2\}$'
+    [[ "$incoming_channel" =~ $channel_pattern ]] || fail "$profile_refusal"
+    [[ -f CONTENTS.sha256.json && ! -L CONTENTS.sha256.json ]] || fail "$profile_refusal"
+    for relative in distribution.json update-channel.json; do
+        expected=$(awk -v key="\"$relative\":" '$1 == key {value=$2; gsub(/[\",]/, "", value); print value}' CONTENTS.sha256.json)
+        [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || fail "$profile_refusal"
+        if command -v sha256sum >/dev/null 2>&1; then actual=$(sha256sum "$relative");
+        else actual=$(shasum -a 256 "$relative"); fi
+        [[ "${actual%% *}" == "$expected" ]] || fail "$profile_refusal"
+    done
+    if [[ -e .updates/channel.json || -L .updates/channel.json ]]; then
+        installed_channel=$(profile_line "$project_dir/.updates/channel.json" 65536)
+        disabled_channel=${incoming_channel/\"enabled\":true/\"enabled\":false}
+        [[ "$installed_channel" == "$incoming_channel" || "$installed_channel" == "$disabled_channel" ]] || fail "$profile_refusal"
     fi
+fi
+
+if ! command -v docker >/dev/null 2>&1; then
     fail 'Сначала установите Docker Engine и плагин Docker Compose:
 https://docs.docker.com/engine/install/
 После установки проверьте доступ к Docker для своего пользователя и снова запустите INSTALL.sh.'
@@ -39,11 +71,6 @@ https://docs.docker.com/compose/install/
 Затем снова запустите установщик.'
 fi
 if ! docker info >/dev/null 2>&1; then
-    if [[ "$system" == Darwin || -n "${WSL_DISTRO_NAME:-}" ]]; then
-        fail 'Docker пока недоступен. Откройте Docker Desktop и дождитесь запуска.
-В Windows включите Settings → Resources → WSL Integration для Ubuntu.
-Затем снова откройте этот установщик.'
-    fi
     fail 'Docker пока недоступен. Запустите службу Docker и проверьте права своего пользователя.
 Команда docker info должна выполняться без sudo. Затем снова запустите INSTALL.sh.
 Инструкция: https://docs.docker.com/engine/install/linux-postinstall/'
@@ -96,10 +123,10 @@ if [[ -f update-channel.json || -f .updates/channel.json ]]; then
         && bash scripts/update.sh schedule; then
         printf '%s\n' 'Проверка подписанных обновлений настроена.'
     else
-        printf '%s\n' 'Внимание: чекер запущен, но автообновления не настроены. См. docs/operations/updates.md.' >&2
+        printf '%s\n' 'Внимание: чекер запущен, но автообновления не настроены. См. LINUX.md.' >&2
     fi
 fi
 printf '\n%s\n' 'Контейнер запущен в фоне. Дождитесь первого отчёта в Telegram; это окно можно закрыть.'
 printf '%s\n' 'Проверка работает, пока компьютер включён, не спит и Docker запущен.'
 printf 'Папка установки: %s\n' "$project_dir"
-printf '%s\n' 'Управление: снова откройте INSTALL.bat (Windows) или INSTALL.sh (Linux).' 'В меню доступны запуск, остановка, настройки, журнал и ручное обновление.'
+printf '%s\n' 'Управление: снова запустите bash INSTALL.sh.' 'В меню доступны запуск, остановка, настройки, журнал и ручное обновление.'

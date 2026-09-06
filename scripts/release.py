@@ -108,27 +108,32 @@ def _validate_repository(repository: str) -> None:
         raise ReleaseError("invalid-repository")
 
 
-def _channel_bytes(public_key: str, repository: str) -> bytes:
+def _channel_bytes(public_key: str, repository: str, *, platform: str | None = None) -> bytes:
     from litechecker.update_manifest import parse_channel_config
 
     _validate_repository(repository)
+    if platform is not None and platform not in {"windows", "macos", "linux"}:
+        raise ReleaseError("invalid-platform")
+    manifest = f"release-{platform}.json" if platform else "release.json"
     configuration = {
-        "schema": 1, "enabled": True, "public_key": public_key,
-        "manifest_urls": [f"https://github.com/{repository}/releases/latest/download/release.json"],
+        "schema": 2 if platform else 1, "enabled": True, "public_key": public_key,
+        "manifest_urls": [f"https://github.com/{repository}/releases/latest/download/{manifest}"],
     }
-    payload = (json.dumps(configuration, indent=2) + "\n").encode("utf-8")
+    if platform:
+        configuration["platform"] = platform
+    payload = (json.dumps(configuration, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
     parse_channel_config(payload)
     return payload
 
 
-def channel(*, public_key: Path, repository: str, output: Path) -> None:
+def channel(*, public_key: Path, repository: str, output: Path, platform: str | None = None) -> None:
     encoded_public = _read_file(public_key, limit=128).strip().decode("ascii")
-    payload = _channel_bytes(encoded_public, repository)
+    payload = _channel_bytes(encoded_public, repository, platform=platform)
     _write_new_files({output: (payload, 0o644)})
 
 
 def build_release(*, archive: Path, private_key: Path, output: Path,
-                  version: str, sequence: str, repository: str) -> None:
+                  version: str, sequence: str, repository: str, platform: str | None = None) -> None:
     if not _VERSION.fullmatch(version):
         raise ReleaseError("invalid-version")
     if not re.fullmatch(r"[1-9][0-9]*", sequence, flags=re.ASCII):
@@ -143,7 +148,9 @@ def build_release(*, archive: Path, private_key: Path, output: Path,
     from litechecker.update_manifest import canonical_payload, parse_channel_config, verify_release_metadata
     from litechecker.update_store import validate_source_zip
 
-    verified = validate_source_zip(archive_bytes)
+    if platform is not None and platform not in {"windows", "macos", "linux"}:
+        raise ReleaseError("invalid-platform")
+    verified = validate_source_zip(archive_bytes, expected_platform=platform, expected_version=version)
     files = {item.path.as_posix(): item.data for item in verified.files}
     try:
         embedded = tomllib.loads(files["pyproject.toml"].decode("utf-8"))["project"]["version"]
@@ -164,11 +171,21 @@ def build_release(*, archive: Path, private_key: Path, output: Path,
         raise ReleaseError("archive-contains-signing-key")
 
     public_key = private.public_key().public_bytes_raw()
+    channel_payload = _channel_bytes(base64.b64encode(public_key).decode("ascii"), repository, platform=platform)
+    if platform and "update-channel.json" not in files:
+        raise ReleaseError("archive-channel-missing")
     if "update-channel.json" in files:
         embedded_channel = parse_channel_config(files["update-channel.json"])
         if embedded_channel.public_key != public_key:
             raise ReleaseError("archive-channel-signing-key-mismatch")
+        if embedded_channel.platform != platform:
+            raise ReleaseError("archive-channel-platform-mismatch")
+        if platform and embedded_channel != parse_channel_config(channel_payload):
+            raise ReleaseError("archive-channel-repository-or-configuration-mismatch")
     artifact_name = f"LiteChecker-{version}.zip"
+    if platform:
+        from package_platforms import source_name
+        artifact_name = source_name(platform, version)
     payload = {
         "version": version,
         "sequence": int(sequence),
@@ -179,20 +196,51 @@ def build_release(*, archive: Path, private_key: Path, output: Path,
             "size": len(archive_bytes),
         },
     }
+    if platform:
+        payload["platform"] = platform
     envelope = {
-        "schema": 1, "payload": payload,
+        "schema": 2 if platform else 1, "payload": payload,
         "signature": base64.b64encode(private.sign(canonical_payload(payload))).decode("ascii"),
     }
     manifest_bytes = (json.dumps(envelope, indent=2, ensure_ascii=True) + "\n").encode("utf-8")
     verify_release_metadata(manifest_bytes, public_key)
-    channel_payload = _channel_bytes(base64.b64encode(public_key).decode("ascii"), repository)
     output = _path(output)
     output.mkdir(mode=0o700, parents=True, exist_ok=True)
     _write_new_files({
         output / artifact_name: (archive_bytes, 0o644),
-        output / "release.json": (manifest_bytes, 0o644),
-        output / "update-channel.json": (channel_payload, 0o644),
+        output / (f"release-{platform}.json" if platform else "release.json"): (manifest_bytes, 0o644),
+        output / (f"update-channel-{platform}.json" if platform else "update-channel.json"): (channel_payload, 0o644),
     })
+
+
+def build_platform_release(*, private_key: Path, output: Path, version: str, sequence: str, repository: str) -> None:
+    """One offline snapshot, version, sequence and key; publish local outputs only after all validate."""
+    from package_platforms import build_sources
+    from package_windows import build_package
+
+    raw_key = base64.b64decode(_read_file(private_key, limit=128, private=True).strip(), validate=True)
+    key = Ed25519PrivateKey.from_private_bytes(raw_key)
+    output = _path(output)
+    output.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".platform-release-", dir=output.parent) as temporary:
+        staging = Path(temporary)
+        sources = build_sources(staging / "sources", version=version,
+            public_key=key.public_key().public_bytes_raw(), repository=repository)
+        outputs = {}
+        for platform, archive in sources.items():
+            signed = staging / platform
+            build_release(archive=archive, private_key=private_key, output=signed,
+                version=version, sequence=sequence, repository=repository, platform=platform)
+            for name in (archive.name, f"release-{platform}.json"):
+                outputs[output / name] = ((signed / name).read_bytes(), 0o644)
+        windows = staging / f"LiteChecker-{version}-Windows.zip"
+        build_package(sources["windows"], windows)
+        outputs[output / windows.name] = (windows.read_bytes(), 0o644)
+        for path, (data, _) in list(outputs.items()):
+            if path.suffix == ".zip":
+                checksum = f"{hashlib.sha256(data).hexdigest()}  {path.name}\n".encode("ascii")
+                outputs[path.with_suffix(".zip.sha256")] = (checksum, 0o644)
+        _write_new_files(outputs)
 
 
 def main(argv=None) -> int:
@@ -205,6 +253,7 @@ def main(argv=None) -> int:
     provision.add_argument("--public-key", type=Path, required=True)
     provision.add_argument("--repository", required=True)
     provision.add_argument("--output", type=Path, required=True)
+    provision.add_argument("--platform", choices=("windows", "macos", "linux"))
     build = commands.add_parser("build", help="verify and sign an existing secret-free source archive")
     build.add_argument("--archive", type=Path, required=True)
     build.add_argument("--version", required=True)
@@ -212,21 +261,32 @@ def main(argv=None) -> int:
     build.add_argument("--repository", required=True)
     build.add_argument("--private-key", type=Path, required=True)
     build.add_argument("--output", type=Path, required=True)
+    build.add_argument("--platform", choices=("windows", "macos", "linux"))
+    all_targets = commands.add_parser("build-platforms", help="build and sign all three production packages offline")
+    all_targets.add_argument("--version", required=True)
+    all_targets.add_argument("--sequence", required=True)
+    all_targets.add_argument("--repository", required=True)
+    all_targets.add_argument("--private-key", type=Path, required=True)
+    all_targets.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args(argv)
     try:
         if arguments.command == "keygen":
             keygen(arguments.private_key, arguments.public_key)
             print("Signing key pair created. Keep the private key offline.")
         elif arguments.command == "channel":
-            channel(public_key=arguments.public_key, repository=arguments.repository, output=arguments.output)
+            channel(public_key=arguments.public_key, repository=arguments.repository, output=arguments.output, platform=arguments.platform)
             print("Public update channel created. Existing installed trust is unchanged.")
+        elif arguments.command == "build-platforms":
+            build_platform_release(private_key=arguments.private_key, output=arguments.output,
+                version=arguments.version, sequence=arguments.sequence, repository=arguments.repository)
+            print("Created and verified three platform packages and signed metadata. Nothing uploaded.")
         else:
             build_release(
                 archive=arguments.archive, version=arguments.version,
                 sequence=arguments.sequence, repository=arguments.repository,
-                private_key=arguments.private_key, output=arguments.output,
+                private_key=arguments.private_key, output=arguments.output, platform=arguments.platform,
             )
-            print(f"Created LiteChecker-{arguments.version}.zip, release.json and update-channel.json. Nothing uploaded.")
+            print("Created verified signed source, metadata and channel. Nothing uploaded.")
     except ReleaseError as error:
         print(f"release: {error}", file=sys.stderr)
         return 2
