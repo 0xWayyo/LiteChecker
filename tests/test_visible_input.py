@@ -55,11 +55,15 @@ def read_until(fd, needle, timeout=3):
     ("Bot token: ", "123456789:terminal-echo-fixture"),
     ("Proxy: ", "socks5://fixture:password@proxy.invalid:1080"),
 ])
-def test_sensitive_settings_are_visible_before_enter(label, value):
+@pytest.mark.parametrize("variant", ["shared", "windows"])
+def test_sensitive_settings_are_visible_before_enter(label, value, variant):
+    prompt = ("from litechecker.device_setup import _prompt; "
+              f"value = _prompt({label!r}, secret=True); " if variant == "shared" else
+              "from litechecker.terminal_ui import prompt; "
+              f"value = prompt({label!r}); ")
     code = (
         f"import sys; sys.path.insert(0, {str(ROOT / 'src')!r}); "
-        "from litechecker.device_setup import _prompt; "
-        f"value = _prompt({label!r}, secret=True); assert value == {value!r}; "
+        + prompt + f"assert value == {value!r}; "
         "print('INPUT_ACCEPTED', flush=True)"
     )
     with terminal([sys.executable, "-I", "-c", code]) as (fd, process):

@@ -78,7 +78,7 @@ def test_windows_configuration_uses_visible_input_without_redisplaying_values(tm
     subscription = "https://subscription.invalid/private"
     token = "123456:" + "A" * 30
     proxy = "socks5://user:private-password@proxy.invalid:1080"
-    responses = iter((token, "12345", proxy, subscription))
+    responses = iter((subscription, token, "12345", proxy))
     prompts = []
 
     def visible_input(prompt):
@@ -89,12 +89,6 @@ def test_windows_configuration_uses_visible_input_without_redisplaying_values(tm
     monkeypatch.setattr(getpass, "getpass", lambda _prompt: pytest.fail("Windows input must be visible"))
     windows_trial.configure(tmp_path, telegram=True)
 
-    assert prompts == [
-        "Токен Telegram-бота: ",
-        "ID чата: ",
-        "Прокси Telegram (Enter — без него): ",
-        "Ссылка подписки HTTPS: ",
-    ]
     assert json.loads((tmp_path / "windows-state" / "settings.json").read_bytes()) == {
         "subscription_url": subscription,
         "telegram_bot_token": token,
@@ -102,6 +96,7 @@ def test_windows_configuration_uses_visible_input_without_redisplaying_values(tm
         "telegram_proxy_url": proxy,
     }
     output = capsys.readouterr().out
+    assert output.index("Ссылка подписки") < output.index("Токен бота") < output.index("ID чата") < output.index("Прокси Telegram")
     assert "скрыт" not in output
     assert all(value not in output for value in (subscription, token, proxy))
 

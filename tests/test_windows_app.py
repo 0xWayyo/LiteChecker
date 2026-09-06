@@ -57,8 +57,8 @@ def test_real_isolated_entry_normalizes_redirected_ansi_streams_before_onboardin
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "┌─ LiteChecker Windows" in result.stdout.decode("utf-8")
-    assert "Ссылка подписки HTTPS: " in result.stdout.decode("utf-8")
+    assert "LITECHECKER" in result.stdout.decode("utf-8")
+    assert "Ссылка подписки" in result.stdout.decode("utf-8")
     assert b"https://subscription.invalid/test" not in result.stdout + result.stderr
     assert (tmp_path / "windows-state" / "settings.json").is_file()
 
@@ -76,8 +76,8 @@ def test_main_menu_dynamic_start_stop_and_close_does_not_stop(tmp_path):
     assert run_menu(tmp_path, controls=controls, input_fn=answers("1", "1", "0"), output_fn=output.append) == 0
     assert controls.calls == [("start", tmp_path), ("stop", tmp_path)]
     text = "\n".join(output)
-    assert "Запустить мониторинг" in text
-    assert "Остановить мониторинг" in text
+    assert "Запустить проверки" in text
+    assert "Остановить проверки" in text
 
 
 def test_menu_eof_and_invalid_choice_are_safe(tmp_path):
@@ -128,34 +128,47 @@ def test_main_and_settings_menus_use_bounded_actions(tmp_path):
     assert ("update", tmp_path) in controls.calls
 
 
-def test_first_run_prompts_once_but_existing_settings_do_not(tmp_path):
+def test_first_run_prompts_once_but_existing_settings_do_not(tmp_path, monkeypatch):
     from litechecker.windows_app import ensure_initial_settings
 
-    calls = []
-    ensure_initial_settings(
-        tmp_path, configure_fn=lambda root, telegram=False: calls.append((Path(root), telegram)),
-        input_fn=lambda _prompt: "",
-    )
-    assert calls == [(tmp_path, False)]
-    state = tmp_path / "windows-state"
-    state.mkdir()
-    (state / "settings.json").write_text("{}")
-    ensure_initial_settings(
-        tmp_path, configure_fn=lambda root, telegram=False: calls.append((Path(root), telegram)),
-        input_fn=lambda _prompt: "1",
-    )
-    assert calls == [(tmp_path, False)]
+    values = iter(("https://subscription.invalid/test", ""))
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(values))
+    assert ensure_initial_settings(tmp_path)
+    settings = tmp_path / "windows-state/settings.json"
+    before = settings.read_bytes()
+    # A second opening cannot ask for credentials or rewrite settings.
+    assert ensure_initial_settings(tmp_path)
+    assert settings.read_bytes() == before
 
 
-def test_first_run_can_optionally_configure_telegram(tmp_path):
+def test_first_run_cancel_does_not_open_menu_or_write_partial_settings(tmp_path, monkeypatch):
     from litechecker.windows_app import ensure_initial_settings
 
-    calls = []
-    ensure_initial_settings(
-        tmp_path, configure_fn=lambda root, telegram=False: calls.append(telegram),
-        input_fn=lambda _prompt: "1",
-    )
-    assert calls == [False, True]
+    def cancelled(_prompt=""):
+        raise EOFError
+    monkeypatch.setattr("builtins.input", cancelled)
+    assert ensure_initial_settings(tmp_path) is False
+    assert not (tmp_path / "windows-state/settings.json").exists()
+
+
+def test_invalid_status_shape_keeps_menu_usable_without_start(tmp_path):
+    from litechecker.windows_app import run_menu
+    controls = FakeControls([None])
+    controls.status = lambda _root: None
+    output = []
+    assert run_menu(tmp_path, controls=controls, input_fn=answers("0"), output_fn=output.append) == 0
+    assert controls.calls == []
+    assert "СТАТУС НЕИЗВЕСТЕН" in "\n".join(output)
+
+
+def test_stopping_worker_is_not_presented_as_healthy_running(tmp_path):
+    from litechecker.windows_app import run_menu
+    controls = FakeControls([{"state": "running", "phase": "stopping"}])
+    output = []
+    run_menu(tmp_path, controls=controls, input_fn=answers("0"), output_fn=output.append)
+    text = "\n".join(output)
+    assert "🟡 ОСТАНАВЛИВАЕТСЯ" in text
+    assert "🟢 РАБОТАЕТ" not in text and "Проверки работают в фоне" not in text
 
 
 def test_subscription_menu_preserves_telegram_secrets(tmp_path, monkeypatch):
@@ -190,9 +203,15 @@ def test_settings_stop_running_monitor_and_leave_it_stopped(tmp_path):
         {"state": "stopped"},
     ])
     configured = []
+    output = []
+    original_stop = controls.stop
+    async def stop_with_progress(root):
+        assert output[-1] == "Останавливаем проверки для изменения настроек…"
+        return await original_stop(root)
+    controls.stop = stop_with_progress
     run_menu(
         tmp_path, controls=controls, input_fn=answers("3", "1", "0", "0"),
-        output_fn=lambda _line: None,
+        output_fn=output.append,
         configure_fn=lambda root, telegram=False: configured.append(telegram),
     )
     assert controls.calls == [("stop", tmp_path)]

@@ -26,6 +26,7 @@ from litechecker.config import (
 from litechecker.direct_check import run_trial
 from litechecker.runtime import run_with_signals
 from litechecker.state import _atomic_write_json
+from litechecker.terminal_ui import emit, frame, prompt
 
 
 _TELEGRAM_SEND_TIMEOUT_SECONDS = 30
@@ -119,24 +120,75 @@ def load_settings(root: Path, xray: str) -> WindowsTrialSettings:
     )
 
 
-def configure(root: Path, *, telegram=False) -> None:
+def configure(root: Path, *, telegram=False, initial=False) -> bool:
     state = _state_root(root)
     values = {}
     if (state / "settings.json").exists():
         values = json.loads(_read_secure_text(state / "settings.json"))
-    print("Настройки хранятся только в windows-state рядом с программой. Не пересылайте эту папку.")
-    if telegram:
-        values.update(
-            telegram_bot_token=input("Токен Telegram-бота: ").strip(),
-            telegram_chat_id=input("ID чата: ").strip(),
-        )
-        proxy = input("Прокси Telegram (Enter — без него): ").strip()
-        values.pop("telegram_proxy_url", None)
-        if proxy:
-            values["telegram_proxy_url"] = proxy
-    if not telegram or not values.get("subscription_url"):
-        values["subscription_url"] = input("Ссылка подписки HTTPS: ").strip()
+    frame("LITECHECKER · НАСТРОЙКА", ("Подписка и уведомления" if initial else
+          "Telegram" if telegram else "Подписка",))
+    emit("  Ввод виден на экране. Enter подтверждает значение; Ctrl+C отменяет настройку.")
+
+    def field(key, label, hint, error, *, optional=False, removable=False):
+        current = values.get(key)
+        emit("\n  " + label)
+        emit("  " + hint)
+        if current:
+            emit("  Уже задано. Enter — оставить сохранённое значение.")
+        elif optional:
+            emit("  Enter — пропустить.")
+        if removable and current:
+            emit("  Минус (-) — удалить сохранённое значение.")
+        while True:
+            entered = prompt("Значение:").strip()
+            value = current if not entered and current else entered or None
+            if removable and entered == "-":
+                value = None
+            proposed = {**values, key: value}
+            if value is not None or optional:
+                try:
+                    TrialConfiguration.model_validate(proposed)
+                except ValueError:
+                    pass
+                else:
+                    if value is None:
+                        values.pop(key, None)
+                    else:
+                        values[key] = value
+                    return value
+            emit("  ⚠️ " + error)
+
+    try:
+        if initial or not telegram or not values.get("subscription_url"):
+            field("subscription_url", "[1/4] Ссылка подписки" if initial else "Ссылка подписки",
+                  "Полная HTTPS-ссылка из вашего VPN-сервиса.",
+                  "Нужна полная ссылка, начинающаяся с https://. Попробуйте ещё раз.")
+        if telegram or initial:
+            token = field("telegram_bot_token", "[2/4] Токен бота" if initial else "[1/3] Токен бота",
+                          "Возьмите токен у @BotFather. Без него отчёт останется только на устройстве.",
+                          "Нужен токен из @BotFather: цифры, двоеточие и ключ. Попробуйте ещё раз.",
+                          optional=True)
+            if token:
+                field("telegram_chat_id", "[3/4] ID чата" if initial else "[2/3] ID чата",
+                      "Число, например -123456789. Для группы ID обычно с минусом.",
+                      "Нужно ненулевое целое число, а не название чата. Попробуйте ещё раз.")
+                field("telegram_proxy_url", "[4/4] Прокси Telegram" if initial else "[3/3] Прокси Telegram",
+                      "Необязательно. Формат: socks5://логин:пароль@IP:порт (также http:// и https://).",
+                      "Нужен URL прокси: socks5://логин:пароль@IP:порт. Попробуйте ещё раз.",
+                      optional=True, removable=True)
+            else:
+                values.pop("telegram_chat_id", None)
+                values.pop("telegram_proxy_url", None)
+                emit("  Проверки будут работать без Telegram. Подключить его можно позже в настройках.")
+    except (EOFError, KeyboardInterrupt):
+        emit("\n  Настройка отменена. Сохранённые данные не изменены.")
+        return False
     save_configuration(root, values)
+    emit("\n  ✅ Настройки сохранены")
+    emit("  Подписка: задана · Telegram: " + ("настроен" if values.get("telegram_bot_token") else "не подключён"))
+    if initial:
+        emit("  Проверки ещё не запущены. В меню выберите «1 — Запустить проверки».")
+    return True
 
 
 def _save_text(state: Path, text: str, *, name="last-report.txt") -> None:
@@ -239,7 +291,8 @@ def main(argv=None) -> int:
             print(f"Диагностика: {state / 'last-diagnostics.txt'}")
             return 0 if result.ok else 1
         if args.setup or args.configure_telegram or not (state / "settings.json").exists():
-            configure(root, telegram=args.configure_telegram)
+            if configure(root, telegram=args.configure_telegram) is False:
+                return 130
             if args.setup or args.configure_telegram:
                 print("Настройки сохранены. Проверка не запущена.")
                 return 0
