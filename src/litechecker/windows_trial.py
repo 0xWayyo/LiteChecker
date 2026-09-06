@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 from litechecker.atomic_io import atomic_replace
 from litechecker.collector.auth import AgentIdentity
 from litechecker.collector.reporting import chunk_message
-from litechecker.collector.telegram import TelegramClient
+from litechecker.collector.telegram import TelegramClient, telegram_client_options
 from litechecker.config import (
     ProbeSettings, _automatic_device_name, _device_identity, _read_secure_text,
     _validate_telegram_proxy_secret,
@@ -251,9 +251,7 @@ async def execute(settings: WindowsTrialSettings, *, send=False):
             try:
                 async with asyncio.timeout(_TELEGRAM_SEND_TIMEOUT_SECONDS):
                     client = TelegramClient(
-                        token=settings.telegram_bot_token.get_secret_value(),
-                        chat_id=settings.telegram_chat_id, topic_id=settings.telegram_topic_id,
-                        proxy_url=settings.telegram_proxy_url.get_secret_value() if settings.telegram_proxy_url else None,
+                        **telegram_client_options(settings),
                         max_attempts=1,
                     )
                     await client.send_chunks(chunk_message(result.text))

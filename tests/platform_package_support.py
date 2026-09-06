@@ -17,13 +17,14 @@ def extracted_profile(directory: Path, platform: str):
         directory / "archives", version="0.6.0", public_key=key.public_key().public_bytes_raw(),
         repository="example/LiteChecker")
     archive = paths[platform]
-    if platform == "windows":
-        archive = directory / "archives/LiteChecker-0.6.0-Windows.zip"
-        script("package_windows").build_package(paths[platform], archive)
+    if platform in {"windows", "macos"}:
+        label = "Windows" if platform == "windows" else "macOS"
+        archive = directory / f"archives/LiteChecker-0.6.0-{label}.zip"
+        script("package_desktop").build_package(paths[platform], archive, platform=platform)
     with zipfile.ZipFile(archive) as bundle:
         bundle.extractall(directory / "public")
     root = directory / "public/LiteChecker"
-    return (root / "_app" if platform == "windows" else root), key
+    return (root / "_app" if platform in {"windows", "macos"} else root), key
 
 
 def local_runtime(release: Path):

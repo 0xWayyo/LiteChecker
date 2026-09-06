@@ -12,7 +12,7 @@ import stat
 import tomllib
 import zipfile
 
-import package_agent
+from artifact_io import read_release_input
 import release
 from litechecker.update_store import validate_source_zip
 
@@ -37,7 +37,7 @@ PLATFORM_MODULES = {
 POSIX_FILES = ("run.sh", "scripts/install.sh", "scripts/control.sh", "scripts/update.sh", "scripts/install-profile.sh")
 PLATFORM_FILES = {
     "windows": ("LiteChecker.bat", "WINDOWS.md", "scripts/windows-native.ps1", "scripts/windows-app-entry.py", "scripts/windows-entry.py"),
-    "macos": POSIX_FILES + ("INSTALL.command", "MACOS.md", "scripts/install-macos.sh", "scripts/native-direct.sh"),
+    "macos": POSIX_FILES + ("INSTALL.command", "MACOS.md", "scripts/macos-launcher.command", "scripts/install-macos.sh", "scripts/native-direct.sh"),
     "linux": POSIX_FILES + ("INSTALL.sh", "LINUX.md", "Dockerfile", ".dockerignore", "compose.standalone.yml", "compose.telegram-proxy.yml", "scripts/prepare-updater.sh"),
 }
 # psutil is required by shared probe.py, including POSIX: it is not Windows-only.
@@ -54,13 +54,12 @@ RUNTIME_PACKAGES = frozenset({
 
 
 def source_name(platform: str, version: str) -> str:
-    labels = {"windows": "windows-update-source", "macos": "macOS", "linux": "Linux"}
+    labels = {"windows": "windows-update-source", "macos": "macos-update-source", "linux": "Linux"}
     return f"LiteChecker-{version}-{labels[platform]}.zip"
 
 
 def _read(name: str) -> bytes:
-    # Reuse regular-file, no-link traversal; never invoke legacy secret packaging.
-    return package_agent._read_release_input(ROOT / name, root=ROOT)
+    return read_release_input(ROOT / name, root=ROOT)
 
 
 def _runtime_metadata(version: str) -> dict[str, bytes]:

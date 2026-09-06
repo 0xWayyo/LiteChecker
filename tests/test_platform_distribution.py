@@ -175,7 +175,7 @@ def test_sign_all_targets_and_windows_wrapper_preserves_payload(sources, tmp_pat
         assert artifact.read_bytes() == path.read_bytes()
         assert payload["artifact"]["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
     wrapper = tmp_path / "LiteChecker-0.6.0-Windows.zip"
-    script("package_windows").build_package(paths["windows"], wrapper)
+    script("package_desktop").build_package(paths["windows"], wrapper)
     with zipfile.ZipFile(wrapper) as archive:
         for name, data in contents(paths["windows"]).items():
             assert archive.read("LiteChecker/_app/" + name) == data
@@ -210,10 +210,13 @@ def test_one_command_builds_all_public_artifacts_without_overwriting(tmp_path):
     args = ["build-platforms", "--version", "0.6.0", "--sequence", "8", "--repository", "example/LiteChecker", "--private-key", str(private), "--output", str(output)]
     assert release.main(args) == 0
     assert {p.name for p in output.glob("*.zip")} == {
-        "LiteChecker-0.6.0-Windows.zip", "LiteChecker-0.6.0-macOS.zip", "LiteChecker-0.6.0-Linux.zip", "LiteChecker-0.6.0-windows-update-source.zip",
+        "LiteChecker-0.6.0-Windows.zip", "LiteChecker-0.6.0-macOS.zip", "LiteChecker-0.6.0-Linux.zip", "LiteChecker-0.6.0-windows-update-source.zip", "LiteChecker-0.6.0-macos-update-source.zip",
     }
     before = {p.name: p.read_bytes() for p in output.iterdir()}
-    assert len(before) == 11
+    assert len(before) == 13
+    mac_manifest = json.loads(before["release-macos.json"])["payload"]["artifact"]
+    assert mac_manifest["urls"] == ["https://github.com/example/LiteChecker/releases/download/v0.6.0/LiteChecker-0.6.0-macos-update-source.zip"]
+    assert mac_manifest["sha256"] == hashlib.sha256(before["LiteChecker-0.6.0-macos-update-source.zip"]).hexdigest()
     assert release.main(args) == 2
     assert before == {p.name: p.read_bytes() for p in output.iterdir()}
     assert all(private.read_bytes().strip() not in data for data in before.values())

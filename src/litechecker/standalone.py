@@ -15,7 +15,9 @@ from litechecker.agent import (
 )
 from litechecker.async_state import state_call
 from litechecker.collector.db import CollectorDB
-from litechecker.collector.telegram import NotificationDispatcher, TelegramClient
+from litechecker.collector.telegram import (
+    NotificationDispatcher, TelegramClient, telegram_client_options,
+)
 from litechecker.config import StandaloneSettings
 from litechecker.models import AgentReport
 from litechecker.measurement import (
@@ -166,12 +168,7 @@ async def _run_locked(settings, *, once, dependencies, telegram, network_lookup,
         [settings.identity],
         registry_activated_at=dependencies.wall_clock(),
     )
-    telegram = telegram or TelegramClient(
-        token=settings.telegram_bot_token.get_secret_value(),
-        chat_id=settings.telegram_chat_id,
-        topic_id=settings.telegram_topic_id,
-        proxy_url=settings.telegram_proxy_url.get_secret_value() if settings.telegram_proxy_url else None,
-    )
+    telegram = telegram or TelegramClient(**telegram_client_options(settings))
     dispatcher = NotificationDispatcher(
         db,
         telegram,

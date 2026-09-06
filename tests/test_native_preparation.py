@@ -1,4 +1,4 @@
-"""Exercise the optional launcher without fetching binaries or using a VPN."""
+"""Exercise macOS runtime preparation without downloads or service changes."""
 import os
 from pathlib import Path
 import shutil
@@ -11,7 +11,6 @@ SOURCE = Path(__file__).resolve().parents[1]
 def setup(tmp_path, *, uv_status=0):
     root = tmp_path / "Lite Checker"
     (root / "scripts").mkdir(parents=True)
-    shutil.copy(SOURCE / "scripts/try-direct.sh", root / "scripts/try-direct.sh")
     shutil.copy(SOURCE / "scripts/native-direct.sh", root / "scripts/native-direct.sh")
     runtime = root / ".native-direct"
     (runtime / "venv/bin").mkdir(parents=True)
@@ -32,23 +31,19 @@ def setup(tmp_path, *, uv_status=0):
     return root, env
 
 
-def test_launcher_runs_native_trial_without_docker_or_changing_working_config(tmp_path):
+def test_preparation_uses_locked_managed_python_without_starting_checker(tmp_path):
     root, env = setup(tmp_path)
-    result = subprocess.run(["bash", "scripts/try-direct.sh"], cwd=root, env=env,
-                            capture_output=True, text=True, timeout=10)
+    result = subprocess.run(["bash", "scripts/native-direct.sh", "prepare", "--root", str(root)],
+                            cwd=root, env=env, capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
-    args = (root / "python-args").read_text().splitlines()
-    assert args[:2] == ["-m", "litechecker.direct_check"]
-    assert "--send" in args
-    assert str(root) in args
+    assert (root / "uv-args").read_text() == "only-managed|sync --frozen --no-dev --python 3.12.11\n"
+    assert not (root / "python-args").exists()
     assert not (root / ".env.standalone").exists()
-    assert "--frozen" in (root / "uv-args").read_text()
-    assert (root / "uv-args").read_text().startswith("only-managed|")
 
 
 def test_dependency_failure_does_not_start_checker(tmp_path):
     root, env = setup(tmp_path, uv_status=17)
-    result = subprocess.run(["bash", "scripts/try-direct.sh"], cwd=root, env=env,
+    result = subprocess.run(["bash", "scripts/native-direct.sh", "prepare", "--root", str(root)], cwd=root, env=env,
                             capture_output=True, text=True, timeout=10)
     assert result.returncode != 0
     assert not (root / "python-args").exists()
@@ -59,7 +54,7 @@ def test_runtime_symlink_is_rejected(tmp_path):
     target = root / ".native-direct"
     target.rename(root / "elsewhere")
     target.symlink_to(root / "elsewhere", target_is_directory=True)
-    result = subprocess.run(["bash", "scripts/try-direct.sh"], cwd=root, env=env,
+    result = subprocess.run(["bash", "scripts/native-direct.sh", "prepare", "--root", str(root)], cwd=root, env=env,
                             capture_output=True, text=True, timeout=10)
     assert result.returncode != 0
     assert not (root / "python-args").exists()
@@ -74,7 +69,7 @@ def test_runtime_python_symlink_escaping_private_runtime_is_rejected_before_sync
     outside.chmod(0o700)
     python.symlink_to(outside)
 
-    result = subprocess.run(["bash", "scripts/try-direct.sh"], cwd=root, env=env,
+    result = subprocess.run(["bash", "scripts/native-direct.sh", "prepare", "--root", str(root)], cwd=root, env=env,
                             capture_output=True, text=True, timeout=10)
 
     assert result.returncode != 0

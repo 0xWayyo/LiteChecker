@@ -16,7 +16,7 @@ def test_matching_profile_gate_builds_extracts_and_validates_offline(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert f"profile={host_platform()} offline-import=ok" in result.stdout
     root = tmp_path / "gate/public/LiteChecker"
-    if os.name == "nt":
+    if host_platform() in {"windows", "macos"}:
         root /= "_app"
     assert (root / "src/litechecker/runtime_lease.py").is_file()
     assert not (root / "tests").exists()

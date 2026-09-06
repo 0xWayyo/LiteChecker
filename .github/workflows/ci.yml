@@ -35,7 +35,7 @@ jobs:
       - name: Prepare pinned macOS native runtime without installing services
         if: runner.os == 'macOS'
         run: |
-          candidate="$PWD/dist/platform-smoke/public/LiteChecker"
+          candidate="$PWD/dist/platform-smoke/public/LiteChecker/_app"
           bash "$candidate/scripts/native-direct.sh" prepare --root "$candidate"
           "$candidate/.native-direct/venv/bin/python" -I -B -c 'import sys; from pathlib import Path; sys.path.insert(0,sys.argv[1]+"/src"); from litechecker.native_runtime import validate_native_runtime; print(validate_native_runtime(Path(sys.argv[1])).python)' "$candidate"
           "$candidate/.native-direct/venv/bin/python" -I -B -m litechecker.cli --help

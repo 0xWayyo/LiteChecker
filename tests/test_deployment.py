@@ -653,7 +653,7 @@ esac""",
     assert len(list(output.iterdir())) == 3
     for platform, suffix, guide in (
         ("windows", "windows-update-source", "WINDOWS.md"),
-        ("macos", "macOS", "MACOS.md"),
+        ("macos", "macos-update-source", "MACOS.md"),
         ("linux", "Linux", "LINUX.md"),
     ):
         archive = output / f"LiteChecker-0.6.0-{suffix}.zip"
@@ -662,16 +662,14 @@ esac""",
         assert any(file.path.as_posix() == guide for file in validated.files)
 
 
-def test_client_markdown_links_resolve_inside_archive_or_use_https():
-    packager_path = ROOT / "scripts/package_agent.py"
-    spec = importlib.util.spec_from_file_location("client_packager", packager_path)
-    assert spec is not None and spec.loader is not None
-    packager = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(packager)
+@pytest.mark.parametrize("platform", ["windows", "macos", "linux"])
+def test_client_markdown_links_resolve_inside_archive_or_use_https(tmp_path, platform):
+    from platform_package_support import extracted_profile
 
-    inventory = set(packager.FILES)
+    root, _ = extracted_profile(tmp_path, platform)
+    inventory = {path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()}
     for source_name in sorted(name for name in inventory if name.endswith(".md")):
-        source = ROOT / source_name
+        source = root / source_name
         body = source.read_text(encoding="utf-8")
         for raw_target in re.findall(r"\[[^\]]+\]\(([^)]+)\)", body):
             target = urlsplit(raw_target)

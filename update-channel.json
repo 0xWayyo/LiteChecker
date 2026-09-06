@@ -1,8 +1,0 @@
-{
-  "schema": 1,
-  "enabled": true,
-  "public_key": "ZedQZh8atscOkHjcTSjHuYsKaeS8f6eXOun7N2De4gg=",
-  "manifest_urls": [
-    "https://github.com/0xWayyo/LiteChecker/releases/latest/download/release.json"
-  ]
-}

@@ -223,7 +223,7 @@ def build_release(*, archive: Path, private_key: Path, output: Path,
 def build_platform_release(*, private_key: Path, output: Path, version: str, sequence: str, repository: str) -> None:
     """One offline snapshot, version, sequence and key; publish local outputs only after all validate."""
     from package_platforms import build_sources
-    from package_windows import build_package
+    from package_desktop import build_package
 
     raw_key = base64.b64decode(_read_file(private_key, limit=128, private=True).strip(), validate=True)
     key = Ed25519PrivateKey.from_private_bytes(raw_key)
@@ -240,9 +240,10 @@ def build_platform_release(*, private_key: Path, output: Path, version: str, seq
                 version=version, sequence=sequence, repository=repository, platform=platform)
             for name in (archive.name, f"release-{platform}.json"):
                 outputs[output / name] = ((signed / name).read_bytes(), 0o644)
-        windows = staging / f"LiteChecker-{version}-Windows.zip"
-        build_package(sources["windows"], windows)
-        outputs[output / windows.name] = (windows.read_bytes(), 0o644)
+        for platform, label in (("windows", "Windows"), ("macos", "macOS")):
+            wrapper = staging / f"LiteChecker-{version}-{label}.zip"
+            build_package(sources[platform], wrapper, platform=platform)
+            outputs[output / wrapper.name] = (wrapper.read_bytes(), 0o644)
         for path, (data, _) in list(outputs.items()):
             if path.suffix == ".zip":
                 checksum = f"{hashlib.sha256(data).hexdigest()}  {path.name}\n".encode("ascii")

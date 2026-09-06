@@ -82,6 +82,17 @@ class TelegramPermanentError(TelegramError):
     """A closed delivery failure that requires operator intervention."""
 
 
+def telegram_client_options(settings) -> dict[str, str | int | None]:
+    """Extract explicit delivery settings for a caller-owned Telegram client."""
+    proxy = settings.telegram_proxy_url
+    return {
+        "token": settings.telegram_bot_token.get_secret_value(),
+        "chat_id": settings.telegram_chat_id,
+        "topic_id": settings.telegram_topic_id,
+        "proxy_url": proxy.get_secret_value() if proxy is not None else None,
+    }
+
+
 class TelegramClient:
     def __init__(
         self,

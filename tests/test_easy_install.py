@@ -5,7 +5,6 @@ from pathlib import Path
 import shutil
 import subprocess
 import pty
-import re
 
 import pytest
 
@@ -18,7 +17,7 @@ BASH = shutil.which("bash")
 def bundle(tmp_path):
     source = tmp_path / "Папка Ивана's LiteChecker"
     (source / "scripts").mkdir(parents=True)
-    for name in ("scripts/install.sh", "scripts/install-wsl.sh", "INSTALL.sh", "INSTALL.command"):
+    for name in ("scripts/install.sh", "INSTALL.sh", "INSTALL.command"):
         original = ROOT / name
         if original.is_file():
             shutil.copy2(original, source / name)
@@ -83,43 +82,6 @@ def launch(source, env, script="scripts/install.sh", *args):
 def calls(env):
     log = Path(env["RUN_LOG"])
     return log.read_text().splitlines() if log.exists() else []
-
-
-def windows_bash_entry():
-    # Exercise the actual Bash handoff chosen by PowerShell. Windows/WSL
-    # discovery itself still requires a real Windows integration check.
-    script = (ROOT / "INSTALL-WSL.ps1").read_text(encoding="utf-8-sig")
-    handoff = re.search(r'--exec bash "\$linuxSource/([^"\n]+)"', script)
-    assert handoff, "Windows installer must have an identifiable Bash entry"
-    return handoff.group(1)
-
-
-@pytest.mark.parametrize("setup_exit", [0, 19])
-def test_windows_bash_handoff_installs_with_redirected_input(bundle, local_env, setup_exit):
-    shutil.copy2(ROOT / "scripts/control.sh", bundle / "scripts/control.sh")
-    local_env["WSL_DISTRO_NAME"] = "Ubuntu"
-    local_env["FAIL_SETUP"] = str(setup_exit)
-    result = launch(bundle, local_env, windows_bash_entry())
-    assert calls(local_env) == (["setup --quick", "start", "status"]
-                               if setup_exit == 0 else ["setup --quick"])
-    assert result.returncode == setup_exit
-
-
-def test_windows_bash_handoff_opens_menu_on_terminal(bundle, local_env):
-    (bundle / "scripts/control.sh").write_text(
-        '#!/bin/bash\nprintf "menu\\n" >> "$RUN_LOG"\n'
-    )
-    local_env["WSL_DISTRO_NAME"] = "Ubuntu"
-    master, slave = pty.openpty()
-    try:
-        result = subprocess.run([BASH, str(bundle / windows_bash_entry())],
-                                stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                text=True, env=local_env, timeout=10)
-    finally:
-        os.close(master)
-        os.close(slave)
-    assert result.returncode == 0, result.stderr
-    assert calls(local_env) == ["menu"]
 
 
 @pytest.mark.parametrize("entry", ["scripts/install.sh", "INSTALL.sh", "INSTALL.command"])
@@ -329,128 +291,3 @@ def test_install_logging_refuses_symlinks_without_touching_target(bundle, local_
         assert not list(elsewhere.iterdir())
     else:
         assert elsewhere.read_text() == "keep this unrelated content\n"
-
-
-def test_wsl_migration_excludes_foreign_device_state_and_unknown_files(bundle, local_env):
-    (bundle / ".env.standalone").write_text("foreign configuration\n")
-    (bundle / "state/standalone").mkdir(parents=True)
-    (bundle / "state/standalone/device.json").write_text("foreign device identity\n")
-    (bundle / "secrets/unknown_private_file").write_text("do not transfer\n")
-    (bundle / "src/litechecker/.env").write_text("also do not transfer\n")
-    result = launch(bundle, local_env, "scripts/install-wsl.sh", str(bundle))
-    assert result.returncode == 0, result.stderr
-    installed = Path(local_env["HOME"]) / "LiteChecker"
-    assert calls(local_env) == ["setup --quick", "start", "status"]
-    assert (installed / ".env.standalone").read_text() == "configured here\n"
-    assert not (installed / "state/standalone/device.json").exists()
-    assert not (installed / "secrets/unknown_private_file").exists()
-    assert not (installed / "src/litechecker/.env").exists()
-    assert (installed / "secrets/telegram_bot_token").read_text() == "shared-test-bot-token\n"
-    assert installed.stat().st_mode & 0o777 == 0o700
-    assert (installed / "secrets").stat().st_mode & 0o777 == 0o700
-    assert (installed / "secrets/telegram_bot_token").stat().st_mode & 0o777 == 0o600
-
-
-def test_wsl_migration_recursively_installs_nested_runtime_modules(bundle, local_env):
-    nested = bundle / "src/litechecker/diagnostics/platform/linux.py"
-    nested.parent.mkdir(parents=True)
-    nested.write_text("NESTED_RUNTIME = True\n")
-
-    result = launch(bundle, local_env, "scripts/install-wsl.sh", str(bundle))
-
-    assert result.returncode == 0, result.stderr
-    installed = Path(local_env["HOME"]) / "LiteChecker"
-    assert (
-        installed / "src/litechecker/diagnostics/platform/linux.py"
-    ).read_text() == "NESTED_RUNTIME = True\n"
-
-
-def test_wsl_repeat_preserves_local_state_config_and_secrets(bundle, local_env):
-    installed = Path(local_env["HOME"]) / "LiteChecker"
-    (installed / "state/standalone").mkdir(parents=True)
-    (installed / "state/standalone/device.json").write_text("my identity\n")
-    (installed / ".env.standalone").write_text("my config\n")
-    (installed / "secrets").mkdir()
-    (installed / "secrets/telegram_bot_token").write_text("my bot token\n")
-    (installed / "secrets/subscription_url").write_text("my subscription\n")
-    result = launch(bundle, local_env, "scripts/install-wsl.sh", str(bundle))
-    assert result.returncode == 0, result.stderr
-    assert calls(local_env) == ["start", "status"]
-    assert (installed / "state/standalone/device.json").read_text() == "my identity\n"
-    assert (installed / ".env.standalone").read_text() == "my config\n"
-    assert (installed / "secrets/telegram_bot_token").read_text() == "my bot token\n"
-    assert (installed / "secrets/subscription_url").read_text() == "my subscription\n"
-
-
-def test_wsl_refuses_a_link_as_installation_directory(bundle, local_env, tmp_path):
-    elsewhere = tmp_path / "elsewhere"
-    elsewhere.mkdir()
-    (Path(local_env["HOME"]) / "LiteChecker").symlink_to(elsewhere)
-    result = launch(bundle, local_env, "scripts/install-wsl.sh", str(bundle))
-    assert result.returncode != 0
-    assert not list(elsewhere.iterdir())
-    assert calls(local_env) == []
-
-
-def test_wsl_refuses_linked_shared_secret_before_copying_it(bundle, local_env, tmp_path):
-    secret = bundle / "secrets/telegram_bot_token"
-    secret.unlink()
-    unrelated = tmp_path / "unrelated-secret"
-    unrelated.write_text("unrelated-private-value\n")
-    secret.symlink_to(unrelated)
-    result = launch(bundle, local_env, "scripts/install-wsl.sh", str(bundle))
-    assert result.returncode != 0
-    assert "unrelated-private-value" not in result.stdout + result.stderr
-    assert not (Path(local_env["HOME"]) / "LiteChecker/secrets/telegram_bot_token").exists()
-    assert calls(local_env) == []
-
-
-def test_wsl_copies_optional_proxy_with_private_permissions_and_overlay(bundle, local_env):
-    (bundle / "secrets/telegram_proxy_url").write_text("socks5://fixture-user:fixture-password@proxy.invalid:1080\n")
-    result = launch(bundle, local_env, "scripts/install-wsl.sh", str(bundle))
-    assert result.returncode == 0, result.stderr
-    installed = Path(local_env["HOME"]) / "LiteChecker"
-    proxy = installed / "secrets/telegram_proxy_url"
-    assert proxy.read_text() == "socks5://fixture-user:fixture-password@proxy.invalid:1080\n"
-    assert proxy.stat().st_mode & 0o777 == 0o600
-    assert (installed / "compose.telegram-proxy.yml").is_file()
-    assert "fixture-password" not in result.stdout + result.stderr
-
-
-def test_wsl_keeps_existing_local_proxy_on_repeat_install(bundle, local_env):
-    installed = Path(local_env["HOME"]) / "LiteChecker"
-    (installed / "secrets").mkdir(parents=True)
-    proxy = installed / "secrets/telegram_proxy_url"
-    proxy.write_text("socks5://my-existing-proxy.invalid:1080\n")
-    proxy.chmod(0o644)
-    (bundle / "secrets/telegram_proxy_url").write_text("socks5://replacement-proxy.invalid:1080\n")
-    result = launch(bundle, local_env, "scripts/install-wsl.sh", str(bundle))
-    assert result.returncode == 0, result.stderr
-    assert proxy.read_text() == "socks5://my-existing-proxy.invalid:1080\n"
-    assert proxy.stat().st_mode & 0o777 == 0o600
-
-
-@pytest.mark.parametrize("location", ["bundle", "installed"])
-@pytest.mark.parametrize("kind", ["empty", "whitespace", "directory", "symlink", "dangling", "fifo"])
-def test_wsl_rejects_unsafe_optional_proxy_before_setup(bundle, local_env, tmp_path, location, kind):
-    directory = bundle if location == "bundle" else Path(local_env["HOME"]) / "LiteChecker"
-    (directory / "secrets").mkdir(parents=True, exist_ok=True)
-    proxy = directory / "secrets/telegram_proxy_url"
-    if kind == "directory":
-        proxy.mkdir()
-    elif kind == "fifo":
-        os.mkfifo(proxy)
-    elif kind in ("symlink", "dangling"):
-        outside = tmp_path / "outside-secret"
-        if kind == "symlink":
-            outside.write_text("never-show-this-value")
-            outside.chmod(0o644)
-        proxy.symlink_to(outside)
-    else:
-        proxy.write_text(" \n\t" if kind == "whitespace" else "")
-    result = launch(bundle, local_env, "scripts/install-wsl.sh", str(bundle))
-    assert result.returncode != 0
-    assert calls(local_env) == []
-    assert "never-show-this-value" not in result.stdout + result.stderr
-    if kind == "symlink":
-        assert outside.stat().st_mode & 0o777 == 0o644

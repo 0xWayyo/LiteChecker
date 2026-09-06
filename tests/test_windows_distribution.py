@@ -1,17 +1,21 @@
 """End-user Windows ZIP is a clean wrapper around the validated source payload."""
 import hashlib
 import importlib.util
-import json
 from pathlib import Path
+import sys
 import zipfile
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def load_script(name):
+    # Mirror direct script execution so the shared sibling builder is importable.
+    if str(ROOT / "scripts") not in sys.path:
+        sys.path.insert(0, str(ROOT / "scripts"))
     path = ROOT / "scripts" / name
     assert path.is_file(), "Windows distribution builder is missing"
     spec = importlib.util.spec_from_file_location("distribution_" + path.stem, path)
@@ -21,19 +25,13 @@ def load_script(name):
 
 
 def source_package(tmp_path):
-    module = load_script("package_agent.py")
-    source = tmp_path / "source"
-    source.mkdir()
-    module.ROOT = source
-    for name in (*module.FILES, "src/litechecker/__init__.py", "LiteChecker.bat", "scripts/windows-native.ps1", "scripts/windows-app-entry.py", "WINDOWS.md"):
-        path = source / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("public fixture " + name, encoding="utf-8")
-    module.main([])
-    return source / "dist/LiteChecker-agent.zip"
+    return load_script("package_platforms.py").build_sources(
+        tmp_path / "source", version="0.6.0", repository="example/LiteChecker",
+        public_key=Ed25519PrivateKey.generate().public_key().public_bytes_raw(),
+    )["windows"]
 
 
-def test_universal_archive_contains_native_windows_bootstrap(tmp_path):
+def test_windows_profile_contains_native_windows_bootstrap(tmp_path):
     source = source_package(tmp_path)
     with zipfile.ZipFile(source) as archive:
         for name in ("LiteChecker.bat", "scripts/windows-native.ps1", "scripts/windows-app-entry.py", "WINDOWS.md"):
@@ -41,7 +39,7 @@ def test_universal_archive_contains_native_windows_bootstrap(tmp_path):
 
 
 def test_clean_windows_wrapper_preserves_all_validated_payload_bytes(tmp_path):
-    builder = load_script("package_windows.py")
+    builder = load_script("package_desktop.py")
     source = source_package(tmp_path)
     destination = tmp_path / "windows.zip"
     builder.build_package(source, destination)
@@ -60,7 +58,7 @@ def test_clean_windows_wrapper_preserves_all_validated_payload_bytes(tmp_path):
 
 
 def test_wrapper_refuses_tampered_source_and_keeps_existing_output(tmp_path):
-    builder = load_script("package_windows.py")
+    builder = load_script("package_desktop.py")
     source = source_package(tmp_path)
     with zipfile.ZipFile(source, "a") as archive:
         archive.writestr("LiteChecker/src/foreign.py", "not in manifest")
@@ -72,7 +70,7 @@ def test_wrapper_refuses_tampered_source_and_keeps_existing_output(tmp_path):
 
 
 def test_wrapper_refuses_symlink_output_and_does_not_touch_target(tmp_path):
-    builder = load_script("package_windows.py")
+    builder = load_script("package_desktop.py")
     source = source_package(tmp_path)
     outside = tmp_path / "outside.zip"
     outside.write_bytes(b"preserve")
@@ -84,7 +82,7 @@ def test_wrapper_refuses_symlink_output_and_does_not_touch_target(tmp_path):
 
 
 def test_failed_checksum_write_removes_only_new_partial_delivery(tmp_path, monkeypatch):
-    builder = load_script("package_windows.py")
+    builder = load_script("package_desktop.py")
     source = source_package(tmp_path)
     output = tmp_path / "windows.zip"
     checksum = output.with_suffix(".zip.sha256")

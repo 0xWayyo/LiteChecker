@@ -10,6 +10,8 @@ dist/
 .env.standalone
 native-settings.json
 CONTENTS.sha256.json
+distribution.json
+update-channel.json
 state/
 agents.json
 secrets/

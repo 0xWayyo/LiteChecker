@@ -13,7 +13,7 @@ from typing import Any
 from filelock import AsyncFileLock, Timeout as FileLockTimeout
 
 from litechecker.collector.reporting import chunk_message
-from litechecker.collector.telegram import TelegramClient
+from litechecker.collector.telegram import TelegramClient, telegram_client_options
 from litechecker.config import StandaloneSettings
 from litechecker.direct_check import TrialResult, run_trial
 from litechecker.direct_outbox import DirectOutbox, DirectOutboxError
@@ -32,16 +32,7 @@ class ServiceAlreadyRunning(RuntimeError):
 
 def telegram_client(settings: StandaloneSettings) -> TelegramClient:
     """Build the reporting client; its optional proxy never enters measurement deps."""
-    return TelegramClient(
-        token=settings.telegram_bot_token.get_secret_value(),
-        chat_id=settings.telegram_chat_id,
-        topic_id=settings.telegram_topic_id,
-        proxy_url=(
-            settings.telegram_proxy_url.get_secret_value()
-            if settings.telegram_proxy_url is not None
-            else None
-        ),
-    )
+    return TelegramClient(**telegram_client_options(settings))
 
 
 async def run_service(

@@ -35,7 +35,7 @@ def write_manifest(tree: Path) -> None:
 def native_tree(tmp_path):
     tree = tmp_path / "Пакет LiteChecker"
     (tree / "scripts").mkdir(parents=True)
-    for name in ("run.sh", "scripts/install.sh", "scripts/install-macos.sh", "scripts/native-direct.sh", "scripts/try-direct.sh"):
+    for name in ("run.sh", "scripts/install.sh", "scripts/install-macos.sh", "scripts/native-direct.sh"):
         shutil.copy2(SOURCE / name, tree / name)
     return tree
 
@@ -308,7 +308,7 @@ def test_native_installer_missing_manifest_points_to_attached_client_archive(tmp
     ]
     assert "клиентский ZIP" in result.stderr
     assert "Source code" in result.stderr
-    assert "package_agent.py" not in result.stderr
+    assert "package_platforms.py" not in result.stderr
     assert "PYTHONPATH" not in result.stderr
     assert "uv run" not in result.stderr
     assert not command_log.exists()

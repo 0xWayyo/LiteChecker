@@ -77,7 +77,7 @@ def platform_smoke(output: Path) -> int:
     from litechecker.distribution import host_platform
     from litechecker.update_store import validate_source_zip
     import package_platforms
-    import package_windows
+    import package_desktop
     key = Ed25519PrivateKey.generate().public_key().public_bytes_raw()
     paths = package_platforms.build_sources(output / "archives", version="0.6.0",
         public_key=key, repository="example/LiteChecker")
@@ -91,13 +91,14 @@ def platform_smoke(output: Path) -> int:
             raise ValueError("shared profile source mismatch")
     platform = host_platform()
     source = paths[platform]
-    if platform == "windows":
-        source = output / "archives/LiteChecker-0.6.0-Windows.zip"
-        package_windows.build_package(paths[platform], source)
+    if platform in {"windows", "macos"}:
+        label = "Windows" if platform == "windows" else "macOS"
+        source = output / f"archives/LiteChecker-0.6.0-{label}.zip"
+        package_desktop.build_package(paths[platform], source, platform=platform)
     with zipfile.ZipFile(source) as archive:
         archive.extractall(output / "public")
     root = output / "public/LiteChecker"
-    if platform == "windows":
+    if platform in {"windows", "macos"}:
         root /= "_app"
     modules = ["litechecker." + name.removesuffix(".py").replace("/", ".")
                for name in package_platforms.COMMON_MODULES + package_platforms.PLATFORM_MODULES[platform]]

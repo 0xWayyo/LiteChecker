@@ -19,7 +19,7 @@ from filelock import AsyncFileLock
 
 from litechecker.measurement import SubscriptionFetcher, make_measurement_dependencies, measure_cycle
 from litechecker.collector.reporting import _result_line, chunk_message
-from litechecker.collector.telegram import TelegramClient
+from litechecker.collector.telegram import TelegramClient, telegram_client_options
 from litechecker.config import StandaloneSettings
 from litechecker.direct_network import DirectNetworkUnavailable
 from litechecker.direct_observation import save_last_observation
@@ -369,11 +369,7 @@ async def run_trial(settings, *, send=False, telegram=None, production=False,
 
     async def deliver(text):
         if send:
-            client = telegram or TelegramClient(
-                token=settings.telegram_bot_token.get_secret_value(),
-                chat_id=settings.telegram_chat_id, topic_id=settings.telegram_topic_id,
-                proxy_url=settings.telegram_proxy_url.get_secret_value() if settings.telegram_proxy_url else None,
-            )
+            client = telegram or TelegramClient(**telegram_client_options(settings))
             # Reporting uses its own optional Telegram proxy, or the ordinary
             # route when unconfigured. Never part of probe availability evidence.
             await client.send_chunks(chunk_message(text))
