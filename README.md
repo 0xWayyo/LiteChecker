@@ -1,16 +1,20 @@
 # LiteChecker
 
 LiteChecker проверяет доступность VLESS/REALITY-подписки с одного или нескольких
-устройств и отправляет диагностические отчёты. Версия: `0.5.0`.
+устройств и отправляет диагностические отчёты. Версия: `0.5.1` (тестовая).
+
+Windows `0.5.0` снята со стабильного канала. Исправления доступны в тестовой
+`0.5.1`; стабильный канал пока остаётся на `0.4.0`.
 
 ## Быстрый старт
 
-Откройте [последний релиз](https://github.com/0xWayyo/LiteChecker/releases/latest),
-скачайте прикреплённый клиентский ZIP (не архив `Source code`), распакуйте его и
+Для macOS и Linux откройте [стабильный релиз](https://github.com/0xWayyo/LiteChecker/releases/latest).
+Для native Windows — [тестовый релиз 0.5.1](https://github.com/0xWayyo/LiteChecker/releases/tag/v0.5.1).
+Скачайте прикреплённый клиентский ZIP (не архив `Source code`), распакуйте его и
 запустите installer для своей ОС:
 
 - macOS: откройте `INSTALL.command` — native DIRECT работает без Docker;
-- Windows 10/11 x64: скачайте `LiteChecker-Windows-0.5.0.zip` и откройте
+- Windows 10/11 x64: скачайте `LiteChecker-0.5.1-Windows.zip` и откройте
   `LiteChecker.bat` — нативно, без WSL, Docker и прав администратора;
 - Linux: выполните `bash INSTALL.sh`.
 

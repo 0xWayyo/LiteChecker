@@ -3,7 +3,7 @@ LiteChecker — начните здесь
 1. Распакуйте ZIP целиком. Не запускайте файлы прямо из архива.
 2. Откройте файл вашей системы:
    macOS   — INSTALL.command
-   Windows — LiteChecker.bat (из LiteChecker-Windows-0.5.0.zip)
+   Windows — LiteChecker.bat (из архива с окончанием -Windows.zip)
    Linux   — bash INSTALL.sh
 3. В меню выберите «Установить и настроить».
 
