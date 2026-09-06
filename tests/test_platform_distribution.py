@@ -53,7 +53,7 @@ REQUIRED = {
 }
 FORBIDDEN = {
     "windows": {"INSTALL.command", "INSTALL.sh", "Dockerfile", "scripts/install-wsl.sh", "scripts/control.sh", "src/litechecker/device_setup.py", "src/litechecker/native_config.py", "src/litechecker/macos_update.py", "src/litechecker/linux_update.py"},
-    "macos": {"LiteChecker.bat", "WINDOWS.md", "INSTALL.sh", "Dockerfile", "compose.standalone.yml", "scripts/install-wsl.sh", "scripts/windows-native.ps1", "src/litechecker/windows_worker.py", "src/litechecker/linux_update.py"},
+    "macos": {"LiteChecker.bat", "WINDOWS.md", "INSTALL.sh", "Dockerfile", "compose.standalone.yml", "scripts/install-wsl.sh", "scripts/prepare-updater.sh", "scripts/windows-native.ps1", "src/litechecker/windows_worker.py", "src/litechecker/linux_update.py"},
     "linux": {"LiteChecker.bat", "WINDOWS.md", "INSTALL.command", "scripts/install-macos.sh", "scripts/native-direct.sh", "scripts/install-wsl.sh", "scripts/windows-native.ps1", "src/litechecker/windows_worker.py", "src/litechecker/macos_service.py", "src/litechecker/native_runtime.py", "src/litechecker/native_install.py", "src/litechecker/install_handoff.py"},
 }
 
@@ -233,6 +233,8 @@ def test_mac_interrupted_fresh_install_keeps_verified_anchors_and_can_retry(tmp_
     assert first.returncode == 73, first.stderr
     assert (root / "distribution.json").read_bytes() == (source / "distribution.json").read_bytes()
     assert (root / "update-channel.json").read_bytes() == (source / "update-channel.json").read_bytes()
+    assert (root / "scripts/install-profile.sh").read_bytes() == (source / "scripts/install-profile.sh").read_bytes()
+    assert not (root / "scripts/prepare-updater.sh").exists()
     installed = root / ".updates"
     installed.mkdir(mode=0o700)
     channel = json.loads((source / "update-channel.json").read_bytes())
@@ -440,3 +442,50 @@ def test_linux_bad_profile_fails_before_docker_or_settings(sources, tmp_path, ca
     assert result.returncode == 2, result.stderr
     assert not docker_log.exists()
     assert before == {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+
+
+def test_posix_packages_share_guard_and_only_linux_ships_linux_bootstrap(sources):
+    _, paths = sources
+    macos, linux, windows = (contents(paths[target]) for target in ("macos", "linux", "windows"))
+    assert "scripts/install-profile.sh" in macos
+    assert macos["scripts/install-profile.sh"] == linux["scripts/install-profile.sh"]
+    assert "scripts/install-profile.sh" not in windows
+    assert "scripts/prepare-updater.sh" in linux
+    assert "scripts/prepare-updater.sh" not in macos
+
+
+@pytest.mark.parametrize("platform", ["macos", "linux"])
+@pytest.mark.parametrize("damage", ["missing", "tampered"])
+def test_posix_installers_reject_bad_shared_guard_before_execution(sources, tmp_path, platform, damage):
+    _, paths = sources
+    with zipfile.ZipFile(paths[platform]) as archive:
+        archive.extractall(tmp_path / platform)
+    source = tmp_path / platform / "LiteChecker"
+    helper = source / "scripts/install-profile.sh"
+    assert helper.is_file(), "shared pre-bootstrap guard must be packaged"
+    marker = tmp_path / "helper-executed"
+    if damage == "missing":
+        helper.unlink()
+    else:
+        helper.write_text('printf executed > "$HELPER_EXECUTED"\nexit 71\n')
+    if platform == "macos":
+        result = install_attempt(source, tmp_path / "installed", tmp_path)
+        assert not (tmp_path / "installed").exists()
+    else:
+        bindir = tmp_path / "bin"
+        bindir.mkdir()
+        for name, body in {
+            "uname": '#!/bin/sh\nprintf "Linux\\n"\n',
+            "docker": '#!/bin/sh\nprintf called > "$DOCKER_CALLED"\nexit 73\n',
+        }.items():
+            path = bindir / name
+            path.write_text(body)
+            path.chmod(0o700)
+        result = subprocess.run(["/bin/bash", str(source / "INSTALL.sh")], stdin=subprocess.DEVNULL,
+            env={**os.environ, "PATH": str(bindir) + os.pathsep + os.environ["PATH"],
+                 "HELPER_EXECUTED": str(marker), "DOCKER_CALLED": str(tmp_path / "docker-called")},
+            text=True, capture_output=True, timeout=10)
+        assert not (tmp_path / "docker-called").exists()
+        assert not (source / "state").exists()
+    assert result.returncode == 2, result.stderr
+    assert not marker.exists()

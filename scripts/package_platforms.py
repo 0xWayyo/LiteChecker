@@ -34,11 +34,11 @@ PLATFORM_MODULES = {
     "macos": POSIX_MODULES + ("install_handoff.py", "macos_network.py", "macos_service.py", "macos_update.py", "native_install.py", "native_runtime.py"),
     "linux": POSIX_MODULES + ("linux_update.py",),
 }
-POSIX_FILES = ("run.sh", "scripts/install.sh", "scripts/control.sh", "scripts/update.sh", "scripts/prepare-updater.sh")
+POSIX_FILES = ("run.sh", "scripts/install.sh", "scripts/control.sh", "scripts/update.sh", "scripts/install-profile.sh")
 PLATFORM_FILES = {
     "windows": ("LiteChecker.bat", "WINDOWS.md", "scripts/windows-native.ps1", "scripts/windows-app-entry.py", "scripts/windows-entry.py"),
     "macos": POSIX_FILES + ("INSTALL.command", "MACOS.md", "scripts/install-macos.sh", "scripts/native-direct.sh"),
-    "linux": POSIX_FILES + ("INSTALL.sh", "LINUX.md", "Dockerfile", ".dockerignore", "compose.standalone.yml", "compose.telegram-proxy.yml"),
+    "linux": POSIX_FILES + ("INSTALL.sh", "LINUX.md", "Dockerfile", ".dockerignore", "compose.standalone.yml", "compose.telegram-proxy.yml", "scripts/prepare-updater.sh"),
 }
 # psutil is required by shared probe.py, including POSIX: it is not Windows-only.
 RUNTIME_DEPENDENCIES = (
