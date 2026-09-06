@@ -58,6 +58,8 @@ def test_real_isolated_entry_normalizes_redirected_ansi_streams_before_onboardin
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "┌─ LiteChecker Windows" in result.stdout.decode("utf-8")
+    assert "Ссылка подписки HTTPS" in result.stderr.decode("utf-8")
+    assert b"https://subscription.invalid/test" not in result.stdout + result.stderr
     assert (tmp_path / "windows-state" / "settings.json").is_file()
 
 

@@ -468,7 +468,7 @@ def test_native_fault_diagnostic_preserves_winerror_without_exception_text():
     assert len(observed) <= 4
 
 
-def native_application(tmp_path):
+def native_application(tmp_path, *, observe_sharing=False):
     """A real isolated Python host; only the external measurement is controlled."""
     import shutil
     import subprocess
@@ -506,6 +506,16 @@ def native_application(tmp_path):
         "from litechecker.direct_check import TrialResult\n"
         + inspect.getsource(native_fault_diagnostic) + "\n"
         + f"fault_root = Path({str(root / 'windows-state')!r})\n"
+        + f"if {observe_sharing!r}:\n"
+        "    import os as fixture_os\n"
+        "    actual_replace = fixture_os.replace\n"
+        "    def observed_replace(source, destination):\n"
+        "        try: return actual_replace(source, destination)\n"
+        "        except OSError as error:\n"
+        "            if Path(destination) == fault_root / 'control' / 'supervisor.json' and getattr(error, 'winerror', None) in (5, 32, 33):\n"
+        "                (fault_root / 'fixture-sharing.json').write_text(json.dumps({'winerror': error.winerror}), encoding='utf-8')\n"
+        "            raise\n"
+        "    fixture_os.replace = observed_replace\n"
         "supervisor_run = windows_control.Supervisor.run\n"
         "worker_run = windows_worker.run_worker\n"
         "async def observed_supervisor(self):\n"
@@ -535,6 +545,80 @@ def native_application(tmp_path):
         encoding="utf-8",
     )
     return root
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform != "win32", reason="requires actual Windows CRT sharing and supervisor lifecycle")
+async def test_native_characterizes_held_status_reader_aborting_real_supervisor_publish(tmp_path, monkeypatch):
+    """A genuine CRT reader reproduces the fatal publish race, not a fake error.
+
+    The parent releases the handle only after the child observes a real sharing
+    error. When bounded replacement recovery is implemented, change the expected
+    failed Start below to started and retain this exact native handshake.
+    """
+    control = module("windows_control")
+    root = native_application(tmp_path, observe_sharing=True)
+    write_record(root, "supervisor.json", record(root, pid=2_000_000_000, phase="stopped"))
+    path = root / "windows-state/control/supervisor.json"
+    before = path.read_bytes()
+    event = root / "windows-state/fixture-sharing.json"
+    fault = root / "windows-state/fixture-supervisor-fault.json"
+    launches = []
+    original_spawn = control._spawn_supervisor
+
+    async def observed_spawn(*args):
+        process = await original_spawn(*args)
+        launches.append(process)
+        return process
+
+    monkeypatch.setattr(control, "_spawn_supervisor", observed_spawn)
+    reader = os.open(path, os.O_RDONLY)  # Same CRT read boundary as read_bytes; no FILE_SHARE_DELETE.
+    starting = asyncio.create_task(control.start(root))
+    try:
+        observed = None
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            try:
+                observed = json.loads(event.read_text(encoding="utf-8"))
+            except (FileNotFoundError, ValueError):
+                pass
+            if observed is not None or starting.done():
+                break
+            await asyncio.sleep(0.02)
+        # Process exit can race the preceding file read; its completed event
+        # was written before that exit, so take one final bounded snapshot.
+        if observed is None and event.exists():
+            observed = json.loads(event.read_text(encoding="utf-8"))
+        assert observed is not None and set(observed) == {"winerror"} and observed["winerror"] in {5, 32, 33}, {"observed": observed,
+            "completed": starting.done(), "returncodes": [process.poll() for process in launches]}
+        os.close(reader)
+        reader = None
+        result = await asyncio.wait_for(starting, 30)
+        chain = json.loads(fault.read_text(encoding="utf-8")) if fault.exists() else []
+        assert result["status"] == "failed", {"result": result, "fault": chain}
+        assert any(item["type"] == "StateError" for item in chain), chain
+        assert any(item.get("winerror") == observed["winerror"] for item in chain), chain
+        frames = {frame for item in chain for frame in item["frames"]}
+        assert "windows_control.py:_publish" in frames and "state.py:_atomic_write_json" in frames, chain
+        assert len(launches) == 1 and launches[0].poll() == 1
+        assert path.read_bytes() == before
+        assert not (root / "windows-state/control/worker.json").exists()
+        assert not (root / "windows-state/controlled-child.txt").exists()
+        # The same controlled record is writable once the real reader closes.
+        control.write_record(root, "supervisor.json", json.loads(before))
+        assert json.loads(path.read_bytes()) == json.loads(before)
+    finally:
+        if reader is not None:
+            os.close(reader)
+        if not starting.done():
+            starting.cancel()
+        await asyncio.gather(starting, return_exceptions=True)
+        for created in launches:
+            if created.poll() is None:
+                await control.stop(root)
+                if created.poll() is None:
+                    created.kill()
+                await asyncio.to_thread(created.wait, 5)
 
 
 @pytest.mark.asyncio

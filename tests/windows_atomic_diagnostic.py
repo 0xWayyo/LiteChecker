@@ -12,7 +12,7 @@ import tempfile
 import time
 
 from litechecker.state import _atomic_write_json
-from litechecker.update_store import UpdateStore, default_install_state
+from litechecker.update_store import UpdateStore, default_install_state, validate_install_state
 from test_windows_update_native import _deny_delete
 from windows_test_support import secure_test_directory
 
@@ -30,6 +30,7 @@ def _codes(error):
 
 
 def _probe(label, path, write, old_value, new_value):
+    print(json.dumps({"operation": label, "stage": "initial-write"}), flush=True)
     write(old_value)
     old_bytes = path.read_bytes()
     before = set(path.parent.iterdir())
@@ -66,7 +67,15 @@ def main():
     with tempfile.TemporaryDirectory(prefix="litechecker-atomic-diagnostic-") as temporary:
         root = Path(temporary) / "private-root"
         root.mkdir()
+        # Windows TEMP may use an 8.3 alias (for example RUNNER~1). Production
+        # storage requires canonical roots; normalize this disposable fixture,
+        # not the production validator and not any user-supplied installation.
+        canonical = root.resolve(strict=True)
+        required_canonicalization = root != canonical
+        root = canonical
         secure_test_directory(root)
+        print(json.dumps({"canonical_fixture_root": root.resolve(strict=True) == root,
+                          "fixture_root_required_canonicalization": required_canonicalization}), flush=True)
         control = root / "windows-state" / "control" / "supervisor.json"
         control_ok = _probe(
             "control-json", control, lambda value: _atomic_write_json(control, value),
@@ -75,6 +84,8 @@ def main():
         store = UpdateStore(root)
         old = default_install_state()
         new = {**old, "status": "updated"}
+        validate_install_state(old)
+        validate_install_state(new)
         update_ok = _probe("update-install-json", store.install_path, store.write_install, old, new)
         return 0 if control_ok and update_ok else 1
 
