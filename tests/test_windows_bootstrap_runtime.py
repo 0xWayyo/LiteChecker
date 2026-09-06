@@ -61,8 +61,31 @@ def test_real_candidate_prepare_and_isolated_validation(tmp_path):
          "-File", str(candidate / "scripts" / "windows-native.ps1"),
          "-Root", str(baseline), "-Action", "Prepare"]
     prepare_environment = {**os.environ, "PSModulePath": str(tmp_path / "intentionally-empty-modules")}
-    # Extraction inherits the parent's private ACL, whereas Prepare deliberately
-    # requires App's protected baseline ACL. Prove refusal before any download.
+    # Windows may assign newly extracted directories to the token's default
+    # owner (e.g. Administrators). Isolate the inheritance guard by setting the
+    # current owner and enabling inheritance, then read back the actual NTFS ACL.
+    acl_setup = captured([
+        str(powershell), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", r"""
+$ErrorActionPreference='Stop'
+$path=$env:LC_TEST_BASELINE
+$current=[System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$acl=[System.IO.Directory]::GetAccessControl($path)
+$acl.SetOwner($current)
+$acl.SetAccessRuleProtection($false,$false)
+[System.IO.Directory]::SetAccessControl($path,$acl)
+$actual=[System.IO.Directory]::GetAccessControl($path)
+if(-not $actual.GetOwner([System.Security.Principal.SecurityIdentifier]).Equals($current)) {
+    throw 'Test baseline owner is not the current user'
+}
+if($actual.AreAccessRulesProtected) { throw 'Test baseline inheritance is disabled' }
+if($actual.GetAccessRules($false,$true,[System.Security.Principal.SecurityIdentifier]).Count -eq 0) {
+    throw 'Test baseline has no inherited access rules'
+}
+"""], cwd=candidate, stdin=subprocess.DEVNULL, timeout=30,
+        env={**prepare_environment, "LC_TEST_BASELINE": str(baseline)})
+    assert acl_setup.returncode == 0, acl_setup.stdout + acl_setup.stderr
+    # Prepare requires App's protected baseline ACL. Prove the specific refusal
+    # before any download, with the preceding ownership guard already satisfied.
     inherited = captured(prepare_command, cwd=candidate, stdin=subprocess.DEVNULL,
         timeout=30, env=prepare_environment)
     assert inherited.returncode != 0, inherited.stdout + inherited.stderr
