@@ -197,10 +197,14 @@ update_result() {
 }
 
 install_now() {
-    regular "$source_root/scripts/install.sh" || { fail 'Для восстановления скачайте свежий установочный ZIP с GitHub.'; return; }
+    local install_root=$source_root
+    # Managed releases supply the UI, while recovery belongs to the retained
+    # baseline ZIP and its data root. Installed macOS keeps fresh-ZIP guidance.
+    if $active_menu; then install_root=$root; fi
+    regular "$install_root/scripts/install.sh" || { fail 'Для восстановления скачайте свежий установочный ZIP с GitHub.'; return; }
     printf 'Папка данных: %s\n' "$root"
-    bash "$source_root/scripts/install.sh" || return $?
-    if [[ "$kind" == native ]] && regular "$root/scripts/control.sh"; then
+    bash "$install_root/scripts/install.sh" || return $?
+    if ! $active_menu && [[ "$kind" == native ]] && regular "$root/scripts/control.sh"; then
         local python
         python=$(settings_python) || { fail 'Установка завершена, но среду управления проверить не удалось.'; return; }
         PYTHONPATH="$root/src" PYTHONDONTWRITEBYTECODE=1 "$python" -m litechecker.install_handoff \
