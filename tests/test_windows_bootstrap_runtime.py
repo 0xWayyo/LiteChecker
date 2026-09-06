@@ -14,6 +14,28 @@ import pytest
 ENABLED = os.name == "nt" and os.environ.get("LC_WINDOWS_BOOTSTRAP_SMOKE") == "1"
 
 
+def captured(command, **kwargs):
+    # PowerShell emits UTF-8. Keep unexpected non-UTF8 bytes as visible escapes
+    # rather than losing an entire stream in a Windows reader-thread exception.
+    return subprocess.run(command, capture_output=True, text=True,
+                          encoding="utf-8", errors="backslashreplace", **kwargs)
+
+
+@pytest.mark.parametrize("returncode", [0, 23])
+def test_bootstrap_capture_preserves_utf8_diagnostics_and_exit_code(monkeypatch, returncode):
+    # Reproduce the runner's legacy locale regardless of the current host.
+    monkeypatch.setattr(subprocess, "_text_encoding", lambda: "cp1252")
+    result = captured([
+        sys.executable, "-I", "-c",
+        "import sys;sys.stdout.buffer.write('Ошибка подготовки\\n'.encode('utf-8'));"
+        "sys.stderr.buffer.write('Сбой\\n'.encode('utf-8')+bytes([0x81]));"
+        f"sys.exit({returncode})",
+    ], timeout=10)
+    assert result.returncode == returncode
+    assert result.stdout == "Ошибка подготовки\n"
+    assert result.stderr == "Сбой\n\\x81"
+
+
 @pytest.mark.skipif(not ENABLED, reason="set LC_WINDOWS_BOOTSTRAP_SMOKE=1 in native Windows CI")
 def test_real_candidate_prepare_and_isolated_validation(tmp_path):
     from litechecker.update_launcher import runtime_python
@@ -21,6 +43,7 @@ def test_real_candidate_prepare_and_isolated_validation(tmp_path):
     from platform_package_support import extracted_profile
     from litechecker.update_store import UpdateStore, validate_source_zip
     from test_active_menu import candidate_archive
+    from windows_test_support import secure_test_directory
     baseline, key = extracted_profile(tmp_path, "windows")
     candidate = UpdateStore(baseline).stage("0.7.0", validate_source_zip(
         candidate_archive(baseline, "0.7.0"), expected_platform="windows", expected_version="0.7.0"))
@@ -34,12 +57,24 @@ def test_real_candidate_prepare_and_isolated_validation(tmp_path):
     )
     before = settings.read_bytes()
     powershell = Path(os.environ["SystemRoot"]) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
-    result = subprocess.run(
-        [str(powershell), "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+    prepare_command = [str(powershell), "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
          "-File", str(candidate / "scripts" / "windows-native.ps1"),
-         "-Root", str(baseline), "-Action", "Prepare"],
-        cwd=candidate, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=900,
-        env={**os.environ, "PSModulePath": str(tmp_path / "intentionally-empty-modules")},
+         "-Root", str(baseline), "-Action", "Prepare"]
+    prepare_environment = {**os.environ, "PSModulePath": str(tmp_path / "intentionally-empty-modules")}
+    # Extraction inherits the parent's private ACL, whereas Prepare deliberately
+    # requires App's protected baseline ACL. Prove refusal before any download.
+    inherited = captured(prepare_command, cwd=candidate, stdin=subprocess.DEVNULL,
+        timeout=30, env=prepare_environment)
+    assert inherited.returncode != 0, inherited.stdout + inherited.stderr
+    assert "Папка _app наследует посторонние права." in inherited.stdout + inherited.stderr
+    assert not (candidate / ".windows-native").exists()
+    assert settings.read_bytes() == before
+    # Model the exact baseline precondition established by the public App action,
+    # without starting that action or weakening the production Prepare checks.
+    secure_test_directory(baseline)
+    result = captured(
+        prepare_command, cwd=candidate, stdin=subprocess.DEVNULL, timeout=900,
+        env=prepare_environment,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert settings.read_bytes() == before
@@ -49,10 +84,10 @@ def test_real_candidate_prepare_and_isolated_validation(tmp_path):
     xray = candidate / ".windows-native" / "tools" / "xray" / "xray.exe"
     assert runtime_python(candidate, system="Windows") == python
     assert xray.is_file()
-    runtime = subprocess.run(
+    runtime = captured(
         [str(python), "-I", "-B", "-c",
          "import json,sys;print(json.dumps({'version':list(sys.version_info[:3]),'base':sys.base_prefix}))"],
-        cwd=tmp_path, text=True, capture_output=True, timeout=30,
+        cwd=tmp_path, timeout=30,
         env={**os.environ, "PYTHONPATH": str(tmp_path / "hostile")},
     )
     assert runtime.returncode == 0, runtime.stderr
@@ -64,10 +99,10 @@ def test_real_candidate_prepare_and_isolated_validation(tmp_path):
 
     base_executable, environment = python_launch(candidate)
     assert base_executable.is_relative_to(candidate / ".windows-native")
-    validation = subprocess.run(
+    validation = captured(
         [str(python), "-I", "-B", str(candidate / "scripts" / "windows-app-entry.py"),
          "worker", "--validate", "--root", str(baseline), "--release", str(candidate)],
-        cwd=tmp_path, stdin=subprocess.DEVNULL, text=True, capture_output=True, timeout=30,
+        cwd=tmp_path, stdin=subprocess.DEVNULL, timeout=30,
         executable=str(base_executable), env=environment,
     )
     assert validation.returncode == 0, validation.stdout + validation.stderr
@@ -120,8 +155,7 @@ def test_real_candidate_prepare_and_isolated_validation(tmp_path):
     # The actual public BAT prepares the bootstrap runtime and dispatches the
     # active candidate, preserving complete prompts through PowerShell 5.1.
     bat = baseline.parent / "LiteChecker.bat"
-    public = subprocess.run(["cmd.exe", "/d", "/c", str(bat)], input="0\n", text=True,
-        encoding="utf-8", capture_output=True, timeout=900)
+    public = captured(["cmd.exe", "/d", "/c", str(bat)], input="0\n", timeout=900)
     assert public.returncode == 0, public.stdout + public.stderr
     assert "MENU-0.7.0" in public.stdout
     assert settings.read_bytes() == before
@@ -151,6 +185,6 @@ def test_real_candidate_prepare_and_isolated_validation(tmp_path):
 
     marker = baseline / "distribution.json"
     marker.write_text('{"platform":"macos","schema":1}\n')
-    refused = subprocess.run(command, input="0\n", text=True, capture_output=True, timeout=30)
+    refused = captured(command, input="0\n", timeout=30)
     assert refused.returncode != 0
     assert "Выберите цифру" not in refused.stdout
