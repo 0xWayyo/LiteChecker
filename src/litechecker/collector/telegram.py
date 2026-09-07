@@ -15,6 +15,7 @@ from filelock import AsyncFileLock, Timeout as FileLockTimeout
 
 from litechecker.async_state import state_call
 from litechecker.collector.db import ClaimedNotification, CollectorDB
+from litechecker.collector.telegram_formatting import report_entities
 from litechecker.telegram_proxy import validate_telegram_proxy_url
 
 
@@ -145,6 +146,9 @@ class TelegramClient:
 
     async def _send_one(self, client: httpx.AsyncClient, text: str) -> None:
         payload: dict[str, object] = {"chat_id": self._chat_id, "text": text}
+        entities = report_entities(text)
+        if entities:
+            payload["entities"] = entities
         if self._topic_id is not None:
             payload["message_thread_id"] = self._topic_id
         body = json.dumps(

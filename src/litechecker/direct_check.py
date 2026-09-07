@@ -18,7 +18,7 @@ import httpx
 from filelock import AsyncFileLock
 
 from litechecker.measurement import SubscriptionFetcher, make_measurement_dependencies, measure_cycle
-from litechecker.collector.reporting import _result_line, chunk_message, report_identity
+from litechecker.collector.reporting import _clean_field, _result_line, chunk_message, report_identity
 from litechecker.app_version import running_version
 from litechecker.collector.telegram import TelegramClient, telegram_client_options
 from litechecker.config import StandaloneSettings
@@ -494,6 +494,11 @@ async def _run_trial(settings, *, production, network_factory, platform_label, v
             return report, scoped_exit, ordinary_exit
 
     report, scoped_exit, ordinary_exit = await guard_network(network, measure)
+    # The human label is display-only. Persist and validate the original native
+    # interface identity; never substitute a friendly alias in scoped sockets.
+    interface_label = _clean_field(
+        getattr(network, "display_interface", "") or network.interface, 32,
+    )
     if scoped_exit is None:
         observed_at = datetime.now(UTC)
         if production:
@@ -507,7 +512,7 @@ async def _run_trial(settings, *, production, network_factory, platform_label, v
                 text, False, reason="direct-exit-unavailable",
                 observed_at=observed_at, interface=network.interface,
             )
-        text = (f"🧪 LiteChecker · пробный DIRECT ({platform_label}) · {network.interface}\n"
+        text = (f"🧪 LiteChecker · пробный DIRECT ({platform_label}) · {interface_label}\n"
                 "⚠️ Проверка не выполнена: контроль выхода через физический интерфейс не прошёл.\n"
                 "Возможны блокировка VPN, сбой DNS, IPinfo или сети. На обычный маршрут проверки не переключались.\n\n"
                 + report_identity(settings.identity.agent_id, running_version()))
@@ -518,12 +523,12 @@ async def _run_trial(settings, *, production, network_factory, platform_label, v
         from litechecker.direct_reporting import format_direct
 
         text = format_direct(
-            report, settings.identity, network.interface, scoped_exit, ordinary_exit,
+            report, settings.identity, interface_label, scoped_exit, ordinary_exit,
             platform_label=platform_label,
         )
     else:
         text = format_trial(
-            report, settings.identity, network.interface, scoped_exit, ordinary_exit,
+            report, settings.identity, interface_label, scoped_exit, ordinary_exit,
             platform_label=platform_label,
         )
     return TrialResult(

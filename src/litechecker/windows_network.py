@@ -20,7 +20,7 @@ import socket
 import struct
 import sys
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .direct_network import DirectNetworkUnavailable, TCPDirectNetwork, _numeric
 
@@ -154,6 +154,18 @@ class _Adapter:
     ipv6_index: int
     sources: tuple[str, ...]
     dns: tuple[str, ...]
+    display_interface: str = field(default="", compare=False)
+
+
+def _display_interface(row: _MibIfRow2) -> str:
+    """Decode the bounded Windows alias without making it part of route identity."""
+    fallback = "Wi-Fi" if row.Type == 71 else "Ethernet"
+    try:
+        length = list(row.Alias).index(0)
+        alias = bytes(row.Alias)[:length * 2].decode("utf-16-le").strip()
+    except (ValueError, UnicodeError):
+        return fallback
+    return alias if alias and alias.isprintable() else fallback
 
 
 def _inventory() -> tuple[_Adapter, ...]:
@@ -214,7 +226,7 @@ def _inventory() -> tuple[_Adapter, ...]:
             name = node.AdapterName.decode("ascii", errors="strict")
         except UnicodeError as exc:
             raise DirectNetworkUnavailable("interface_discovery_failed") from exc
-        candidates.append(_Adapter(name, node.Luid, str(uuid.UUID(bytes_le=bytes(row.InterfaceGuid))), node.IfIndex, node.Ipv6IfIndex, sources, dns))
+        candidates.append(_Adapter(name, node.Luid, str(uuid.UUID(bytes_le=bytes(row.InterfaceGuid))), node.IfIndex, node.Ipv6IfIndex, sources, dns, _display_interface(row)))
     return tuple(candidates)
 
 
@@ -240,6 +252,7 @@ class WindowsDirectNetwork(TCPDirectNetwork):
     guid: str
     ipv4_index: int
     ipv6_index: int
+    display_interface: str = field(default="", compare=False)
 
     async def _query(self, host, kind) -> list[str]:
         # Explicit Windows policy: DoH on the same bound sockets as probes.
@@ -255,7 +268,7 @@ class WindowsDirectNetwork(TCPDirectNetwork):
         adapter = await asyncio.to_thread(_selected)
         return cls(adapter.name, adapter.ipv4_index or adapter.ipv6_index,
                    adapter.sources, adapter.dns, adapter.luid, adapter.guid,
-                   adapter.ipv4_index, adapter.ipv6_index)
+                   adapter.ipv4_index, adapter.ipv6_index, adapter.display_interface)
 
     def _validate_interface(self) -> None:
         expected = _Adapter(self.interface, self.luid, self.guid, self.ipv4_index,

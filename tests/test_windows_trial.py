@@ -120,14 +120,20 @@ def test_atomic_state_write_without_unix_fchmod(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("changed", [False, True])
-async def test_windows_trial_end_validation_invalidates_even_successful_results(tmp_path, monkeypatch, changed):
+@pytest.mark.parametrize("production", [False, True])
+@pytest.mark.parametrize("alias,display", [
+    ("Ethernet 2", "Ethernet 2"),
+    ("Ethernet password=private-value", "Ethernet password=[REDACTED]"),
+])
+async def test_windows_trial_end_validation_invalidates_even_successful_results(tmp_path, monkeypatch, changed, production, alias, display):
     import json
     from datetime import UTC, datetime
     from litechecker import direct_check
     from litechecker.models import AgentReport, ProbeResult, ProbeStage, ResultStatus
 
     class Network:
-        interface = "Ethernet"
+        interface = "{11111111-2222-4333-8444-555555555555}"
+        display_interface = alias
         def _validate_interface(self):
             if changed:
                 raise DirectNetworkUnavailable("interface_changed")
@@ -162,12 +168,17 @@ async def test_windows_trial_end_validation_invalidates_even_successful_results(
     settings = SimpleNamespace(agent=object(), identity=AgentIdentity("test", "City", "PC", 600), state_dir=tmp_path)
     result = await direct_check.run_trial(
         settings, network_factory=factory, platform_label="Windows · эксперимент", validate_after=True,
+        production=production,
     )
     assert "Windows" in result.text
     assert "macOS" not in result.text
+    assert display in result.text and "private-value" not in result.text
+    assert Network.interface not in result.text and "UUID REDACTED" not in result.text
+    assert result.interface == Network.interface
     assert result.available is (not changed)
     assert result.report.results[0].status is (ResultStatus.UNKNOWN if changed else ResultStatus.UP)
     saved = json.loads((tmp_path / "last-observation.json").read_text())
+    assert saved["interface"] == Network.interface
     restored = AgentReport.model_validate(saved["report"])
     assert restored.results == result.report.results
     assert saved["vpn_bypass_confirmed"] is False

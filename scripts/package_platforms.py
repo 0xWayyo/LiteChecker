@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 COMMON_MODULES = (
     "__init__.py", "agent.py", "app_version.py", "async_state.py", "atomic_io.py", "cli.py",
     "collector/__init__.py", "collector/auth.py", "collector/db.py",
-    "collector/reporting.py", "collector/telegram.py", "config.py",
+    "collector/reporting.py", "collector/telegram.py", "collector/telegram_formatting.py", "config.py",
     "direct_check.py", "direct_guard.py", "direct_network.py", "direct_observation.py", "direct_outbox.py",
     "direct_relay.py", "direct_reporting.py", "direct_service.py", "direct_subscription.py",
     "distribution.py", "maintenance.py", "measurement.py", "models.py", "network_identity.py",

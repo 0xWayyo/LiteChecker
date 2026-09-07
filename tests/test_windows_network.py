@@ -101,6 +101,9 @@ class NativeAPI:
             row.InterfaceLuid = data.get("row_luid", node.Luid)
             row.InterfaceIndex = data.get("row_index", node.IfIndex or node.Ipv6IfIndex)
             row.InterfaceGuid[:] = uuid.UUID(data.get("guid", "11111111-2222-3333-4444-555555555555")).bytes_le
+            alias = data.get("alias", "").encode("utf-16-le", errors="surrogatepass")
+            units = list(struct.unpack("<" + "H" * (len(alias) // 2), alias))
+            row.Alias[:len(units)] = units
             row.Type = node.IfType
             row.TunnelType = node.TunnelType
             row.InterfaceAndOperStatusFlags = data.get("hardware_flags", 5)
@@ -159,6 +162,42 @@ async def test_discover_uses_hardware_identity_family_indices_and_adapter_dns(na
     assert direct.guid == "11111111-2222-3333-4444-555555555555"
     assert direct.source_addresses == ("192.168.1.20", "2606:4700::abcd")
     assert direct.dns_servers == ("192.168.1.1",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("alias,kind,expected", [
+    ("Wi-Fi", 71, "Wi-Fi"),
+    ("Ethernet 2", 6, "Ethernet 2"),
+    ("Домашнее подключение 📶", 71, "Домашнее подключение 📶"),
+    ("  Кабель  ", 6, "Кабель"),
+    ("", 71, "Wi-Fi"),
+    ("   ", 6, "Ethernet"),
+    ("\ud800", 71, "Wi-Fi"),
+    ("\x1b\u202e", 71, "Wi-Fi"),
+    ("x" * 257, 6, "Ethernet"),  # Native buffer without a NUL terminator.
+    ("Wi-Fi\0\ud800", 71, "Wi-Fi"),  # Ignore unused storage after terminator.
+])
+async def test_display_alias_does_not_replace_bound_adapter_identity(native, alias, kind, expected):
+    m, api = native
+    guid = "{11111111-2222-4333-8444-555555555555}"
+    api.adapters = [{"name": guid, "alias": alias, "type": kind}]
+    direct = await m.WindowsDirectNetwork.discover()
+    assert direct.display_interface == expected
+    assert direct.interface == guid
+    assert direct.interface_index == 14
+    direct._validate_interface()
+
+
+@pytest.mark.asyncio
+async def test_adapter_alias_rename_does_not_invalidate_same_bound_connection(native, monkeypatch):
+    m, api = native
+    api.adapters = [{"alias": "Wi-Fi"}]
+    direct = await m.WindowsDirectNetwork.discover()
+    api.adapters[0]["alias"] = "Домашний Wi-Fi"
+    sock = Winsock(14)
+    monkeypatch.setattr(m.socket, "socket", lambda *args: sock)
+    assert direct._socket(ipaddress.ip_address("8.8.8.8")) is sock
+    assert ("bind", ("192.168.1.20", 0)) in sock.events
 
 
 @pytest.mark.asyncio
