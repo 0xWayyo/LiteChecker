@@ -6,11 +6,11 @@
 
 ## Самый простой запуск
 
-Скачайте клиентский ZIP версии 0.6.2 из [релизов](https://github.com/0xWayyo/LiteChecker/releases), распакуйте его целиком в новую папку и запустите файл своей ОС:
+Скачайте клиентский ZIP версии 0.6.3 из [релизов](https://github.com/0xWayyo/LiteChecker/releases), распакуйте его целиком в новую папку и запустите файл своей ОС:
 
-- [macOS](../../MACOS.md): `LiteChecker-0.6.2-macOS.zip` → `INSTALL.command`, native DIRECT для Apple Silicon и Intel.
-- [Windows](../../WINDOWS.md): `LiteChecker-0.6.2-Windows.zip` → `LiteChecker.bat`, native DIRECT для Windows 10/11 x64.
-- [Linux](../../LINUX.md): `LiteChecker-0.6.2-Linux.zip` → `bash INSTALL.sh`, Docker Engine и Compose для x86_64/arm64.
+- [macOS](../../MACOS.md): `LiteChecker-0.6.3-macOS.zip` → `INSTALL.command`, native DIRECT для Apple Silicon и Intel.
+- [Windows](../../WINDOWS.md): `LiteChecker-0.6.3-Windows.zip` → `LiteChecker.bat`, native DIRECT для Windows 10/11 x64.
+- [Linux](../../LINUX.md): `LiteChecker-0.6.3-Linux.zip` → `bash INSTALL.sh`, Docker Engine и Compose для x86_64/arm64.
 
 На macOS и Linux выберите «Установить и настроить». В Windows мастер откроется при первом запуске. Введите HTTPS-ссылку подписки, токен бота, ID своего чата и необязательный прокси Telegram. Ввод виден в терминале. На Windows токен можно оставить пустым, чтобы работать без уведомлений; после настройки отдельно выберите «Запустить проверки».
 

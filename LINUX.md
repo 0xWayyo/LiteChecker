@@ -1,6 +1,6 @@
 # LiteChecker для Linux
 
-Скачайте `LiteChecker-0.6.2-Linux.zip` для Linux x86_64 или arm64 и распакуйте
+Скачайте `LiteChecker-0.6.3-Linux.zip` для Linux x86_64 или arm64 и распакуйте
 в новую постоянную папку. Запустите `bash INSTALL.sh` и введите настройки.
 
 Нужны Docker Engine и плагин Docker Compose; `docker info` должен работать

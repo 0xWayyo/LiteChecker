@@ -649,15 +649,15 @@ esac""",
     )
 
     assert result.returncode == 0, result.stderr
-    output = checkout / "dist/platform-sources-0.6.2"
+    output = checkout / "dist/platform-sources-0.6.3"
     assert len(list(output.iterdir())) == 3
     for platform, suffix, guide in (
         ("windows", "windows-update-source", "WINDOWS.md"),
         ("macos", "macos-update-source", "MACOS.md"),
         ("linux", "Linux", "LINUX.md"),
     ):
-        archive = output / f"LiteChecker-0.6.2-{suffix}.zip"
-        validated = validate_source_zip(archive.read_bytes(), expected_platform=platform, expected_version="0.6.2")
+        archive = output / f"LiteChecker-0.6.3-{suffix}.zip"
+        validated = validate_source_zip(archive.read_bytes(), expected_platform=platform, expected_version="0.6.3")
         assert validated.sha256
         assert any(file.path.as_posix() == guide for file in validated.files)
 

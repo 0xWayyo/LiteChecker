@@ -1,7 +1,7 @@
 # LiteChecker
 
 LiteChecker проверяет доступность VLESS/REALITY-подписки с одного или нескольких
-устройств и отправляет диагностические отчёты. Версия исходников: `0.6.2`.
+устройств и отправляет диагностические отчёты. Версия исходников: `0.6.3`.
 Три пакета используют общее ядро и отдельные подписанные каналы обновлений.
 
 ## Быстрый старт
@@ -10,13 +10,13 @@ LiteChecker проверяет доступность VLESS/REALITY-подпис
 Скачайте прикреплённый клиентский ZIP (не архив `Source code`), распакуйте его и
 запустите installer для своей ОС:
 
-- macOS arm64/x86_64: `LiteChecker-0.6.2-macOS.zip`, откройте `INSTALL.command` — native DIRECT без Docker;
-- Windows 10/11 x64: скачайте `LiteChecker-0.6.2-Windows.zip` и откройте
+- macOS arm64/x86_64: `LiteChecker-0.6.3-macOS.zip`, откройте `INSTALL.command` — native DIRECT без Docker;
+- Windows 10/11 x64: скачайте `LiteChecker-0.6.3-Windows.zip` и откройте
   `LiteChecker.bat` — нативно, без WSL, Docker и прав администратора;
-- Linux x86_64/arm64: `LiteChecker-0.6.2-Linux.zip`, выполните `bash INSTALL.sh`.
+- Linux x86_64/arm64: `LiteChecker-0.6.3-Linux.zip`, выполните `bash INSTALL.sh`.
   Нужны Docker Engine и Docker Compose; используется обычный маршрут Docker/хоста, режима DIRECT для Linux нет.
 
-Если установлена 0.6.0, выберите «Проверить обновления» в её меню: настройки и ID
+Если установлена 0.6.0–0.6.2, выберите «Проверить обновления» в её меню: настройки и ID
 сохранятся. Для первой установки используйте новую папку; перенос из тестовых
 версий 0.2–0.5 и сброс их каналов не выполняются. Технические архивы `windows-update-source.zip` и
 `macos-update-source.zip` предназначены для обновлятора; для первой установки
@@ -75,8 +75,8 @@ Telegram использует отдельный настроенный прок
 ```bash
 uv sync --frozen --no-dev
 uv run --frozen --no-dev python scripts/package_platforms.py \
-  --version 0.6.2 --repository 0xWayyo/LiteChecker \
-  --public-key /absolute/path/signing-public.key --output dist/platform-sources-0.6.2
+  --version 0.6.3 --repository 0xWayyo/LiteChecker \
+  --public-key /absolute/path/signing-public.key --output dist/platform-sources-0.6.3
 ```
 
 Команда читает только явный список публичных файлов и публичный ключ. Для macOS

@@ -22,8 +22,8 @@ def candidate_archive(root, version, extra_files=None):
     manifest = json.loads((root / "CONTENTS.sha256.json").read_bytes())
     for name in manifest:
         files[name] = (root / name).read_bytes()
-    files["pyproject.toml"] = files["pyproject.toml"].replace(b'"0.6.2"', json.dumps(version).encode())
-    files["uv.lock"] = files["uv.lock"].replace(b'version = "0.6.2"', ('version = "' + version + '"').encode())
+    files["pyproject.toml"] = files["pyproject.toml"].replace(b'"0.6.3"', json.dumps(version).encode())
+    files["uv.lock"] = files["uv.lock"].replace(b'version = "0.6.3"', ('version = "' + version + '"').encode())
     # Only this visible UI label changes; all dispatch and storage code is real.
     name = "src/litechecker/windows_app.py" if os.name == "nt" else "scripts/control.sh"
     files[name] = files[name].replace(b"header LITECHECKER", ("header MENU-" + version).encode())
@@ -62,7 +62,7 @@ async def test_signed_update_next_menu_uses_candidate_and_keeps_baseline_setting
     assert run.returncode == 0, run.stderr
     assert "MENU-0.7.0" in run.stdout
     assert "MENU-0.7.0 · v0.7.0" in run.stdout
-    assert " · v0.6.2" not in run.stdout
+    assert " · v0.6.3" not in run.stdout
     folder = subprocess.run(command(root) + ["folder"], text=True, capture_output=True, env=env, timeout=10)
     assert str(root) in folder.stdout
     assert str(root / ".updates/releases/0.7.0") not in folder.stdout
